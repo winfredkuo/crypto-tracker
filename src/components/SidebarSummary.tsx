@@ -1,15 +1,16 @@
 import React from 'react';
 import { Asset, PriceData, Transaction } from '../types';
-import { Wallet, Activity } from 'lucide-react';
+import { Wallet, Activity, Trash2 } from 'lucide-react';
 import { motion } from 'motion/react';
 
 interface Props {
   transactions: Transaction[];
   prices: PriceData[];
   usdtTwd: number;
+  onReset?: () => void;
 }
 
-export default function SidebarSummary({ transactions, prices, usdtTwd }: Props) {
+export default function SidebarSummary({ transactions, prices, usdtTwd, onReset }: Props) {
   const calculateHoldings = () => {
     const holdings: Record<Asset, { amount: number; totalCostUSDT: number }> = {
       ETH: { amount: 0, totalCostUSDT: 0 },
@@ -121,6 +122,20 @@ export default function SidebarSummary({ transactions, prices, usdtTwd }: Props)
           })}
         </div>
       </motion.div>
+
+      {/* Danger Zone */}
+      <div className="pt-6 border-t border-gray-100">
+        <button
+          onClick={onReset}
+          className="w-full py-3 px-3 flex items-center justify-center gap-2 text-xs font-bold text-rose-500 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-xl transition-all uppercase tracking-widest shadow-sm"
+        >
+          <Trash2 className="w-4 h-4" />
+          重置所有資料
+        </button>
+        <p className="text-[9px] text-gray-400 text-center mt-2 px-2">
+          注意：此操作將永久刪除雲端資料庫中的所有交易紀錄。
+        </p>
+      </div>
     </div>
   );
 }
