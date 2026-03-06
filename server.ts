@@ -1,8 +1,8 @@
 import "dotenv/config";
 import express from "express";
 import path from "path";
-import pg from "pg";
-const { Client } = pg;
+import pkg from "pg";
+const { Client } = pkg;
 
 // Helper to check if we should use Postgres
 const usePostgres = !!process.env.POSTGRES_URL || !!process.env.DATABASE_URL || !!process.env.POSTGRES_URL_NON_POOLING;
@@ -14,16 +14,20 @@ const getDbClient = async () => {
     throw new Error("No database connection string found in environment variables.");
   }
 
+  // Check for Prisma Accelerate URL which is incompatible with standard pg driver
+  if (connectionString.startsWith("prisma://")) {
+    throw new Error("Detected a Prisma Accelerate URL (prisma://). This application requires a standard PostgreSQL connection string (postgres:// or postgresql://). Please update your environment variables in Vercel.");
+  }
+
   // Diagnostic log (masked)
   const maskedConn = connectionString.replace(/:([^@]+)@/, ":****@");
   console.log(`Attempting to connect to DB with string starting with: ${connectionString.substring(0, 10)}...`);
-  console.log(`Masked connection string: ${maskedConn.substring(0, 50)}...`);
-
+  
   if (connectionString.startsWith("postgres://")) {
     connectionString = connectionString.replace("postgres://", "postgresql://");
   }
 
-  // Use standard pg Client for better reliability across environments
+  // Use standard pg Client
   const client = new Client({
     connectionString: connectionString,
     ssl: connectionString.includes("sslmode=require") || !connectionString.includes("localhost") ? { rejectUnauthorized: false } : false
