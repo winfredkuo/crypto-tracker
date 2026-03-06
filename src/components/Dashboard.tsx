@@ -1,8 +1,7 @@
 import { useState, useMemo } from 'react';
 import { Transaction, PriceData } from '../types';
-import { ArrowDownRight, Trash2, Edit2, TrendingUp, TrendingDown } from 'lucide-react';
+import { ArrowDownRight, Trash2, Edit2 } from 'lucide-react';
 import { motion } from 'motion/react';
-import { LineChart, Line, ResponsiveContainer } from 'recharts';
 
 interface Props {
   transactions: Transaction[];
@@ -12,48 +11,8 @@ interface Props {
   onQuickSell: (tx: Transaction) => void;
 }
 
-// Mock historical data for sparklines
-const generateSparklineData = (currentPrice: number) => {
-  const data = [];
-  let price = currentPrice * 0.95;
-  for (let i = 0; i < 20; i++) {
-    price = price * (1 + (Math.random() * 0.02 - 0.01));
-    data.push({ value: price });
-  }
-  data.push({ value: currentPrice });
-  return data;
-};
-
 export default function Dashboard({ transactions, prices, onDelete, onEdit, onQuickSell }: Props) {
   const [selectedAsset, setSelectedAsset] = useState<string>('ALL');
-
-  const assetStats = useMemo(() => {
-    const stats: Record<string, { amount: number; price: number; change: number }> = {};
-    
-    // Get current prices
-    prices.forEach(p => {
-      const asset = p.symbol.replace('USDT', '');
-      stats[asset] = {
-        amount: 0,
-        price: parseFloat(p.price),
-        change: parseFloat(p.priceChangePercent)
-      };
-    });
-
-    // Calculate holdings
-    transactions.forEach(tx => {
-      if (tx.type === 'BUY' && tx.asset && stats[tx.asset]) {
-        stats[tx.asset].amount += (tx.remainingAmount || 0);
-      } else if (tx.type === 'SELL' && tx.asset && stats[tx.asset]) {
-        stats[tx.asset].amount -= (tx.amount || 0);
-      } else if (tx.type === 'EXCHANGE') {
-        if (tx.fromAsset && stats[tx.fromAsset]) stats[tx.fromAsset].amount -= (tx.fromAmount || 0);
-        if (tx.toAsset && stats[tx.toAsset]) stats[tx.toAsset].amount += (tx.toAmount || 0);
-      }
-    });
-
-    return stats;
-  }, [transactions, prices]);
 
   const assets = useMemo(() => {
     const assetSet = new Set<string>();
@@ -75,55 +34,6 @@ export default function Dashboard({ transactions, prices, onDelete, onEdit, onQu
 
   return (
     <div className="space-y-6">
-      {/* Asset Overview Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {Object.entries(assetStats).map(([asset, stat]) => (
-          <motion.div
-            key={asset}
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="bg-white p-4 rounded-2xl border border-black/5 shadow-sm hover:shadow-md transition-shadow"
-          >
-            <div className="flex justify-between items-start mb-2">
-              <div>
-                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">{asset} / USDT</span>
-                <h4 className="text-xl font-bold text-gray-900">${stat.price.toLocaleString()}</h4>
-              </div>
-              <div className={`flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                stat.change >= 0 ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'
-              }`}>
-                {stat.change >= 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-                {Math.abs(stat.change).toFixed(2)}%
-              </div>
-            </div>
-            
-            <div className="h-12 w-full mb-3">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={generateSparklineData(stat.price)}>
-                  <Line 
-                    type="monotone" 
-                    dataKey="value" 
-                    stroke={stat.change >= 0 ? '#10b981' : '#f43f5e'} 
-                    strokeWidth={2} 
-                    dot={false} 
-                    isAnimationActive={false}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-
-            <div className="flex justify-between items-end">
-              <div className="text-[10px] text-gray-400 font-medium">
-                持有數量: <span className="text-gray-900">{stat.amount.toFixed(4)}</span>
-              </div>
-              <div className="text-[10px] text-gray-400 font-medium">
-                價值: <span className="text-gray-900">${(stat.amount * stat.price).toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
-              </div>
-            </div>
-          </motion.div>
-        ))}
-      </div>
-
       {/* Detailed Transaction List on Dashboard */}
       <motion.div 
         initial={{ opacity: 0, y: 20 }}

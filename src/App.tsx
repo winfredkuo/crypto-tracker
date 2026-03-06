@@ -220,11 +220,6 @@ export default function App() {
               </button>
             </div>
 
-            <MarketInsights 
-              prices={prices}
-              transactions={transactions}
-            />
-
             <button 
               onClick={openAddModal}
               className="w-full py-3 bg-emerald-500 hover:bg-emerald-600 text-white font-bold rounded-xl shadow-lg shadow-emerald-500/20 transition-all flex items-center justify-center gap-2 group"
@@ -244,27 +239,33 @@ export default function App() {
           {/* Content Area */}
           <div className="lg:col-span-9">
             {currentView === 'DASHBOARD' ? (
-              <Dashboard 
-                transactions={transactions} 
-                prices={prices}
-                onDelete={handleDeleteTransaction}
-                onEdit={(tx) => {
-                  setTemplateTransaction(null);
-                  setEditingTransaction(tx);
-                  setIsModalOpen(true);
-                }}
-                onQuickSell={(tx) => {
-                  setEditingTransaction(null);
-                  setTemplateTransaction({
-                    type: 'SELL',
-                    asset: tx.asset,
-                    amount: tx.remainingAmount,
-                    price: parseFloat(prices.find(p => p.symbol === `${tx.asset}USDT`)?.price || '0'),
-                    id: tx.id
-                  });
-                  setIsModalOpen(true);
-                }}
-              />
+              <div className="space-y-6">
+                <MarketInsights 
+                  prices={prices}
+                  transactions={transactions}
+                />
+                <Dashboard 
+                  transactions={transactions} 
+                  prices={prices}
+                  onDelete={handleDeleteTransaction}
+                  onEdit={(tx) => {
+                    setTemplateTransaction(null);
+                    setEditingTransaction(tx);
+                    setIsModalOpen(true);
+                  }}
+                  onQuickSell={(tx) => {
+                    setEditingTransaction(null);
+                    setTemplateTransaction({
+                      type: 'SELL',
+                      asset: tx.asset,
+                      amount: tx.remainingAmount,
+                      price: parseFloat(prices.find(p => p.symbol === `${tx.asset}USDT`)?.price || '0'),
+                      id: tx.id
+                    });
+                    setIsModalOpen(true);
+                  }}
+                />
+              </div>
             ) : (
               <ExchangeHistory 
                 transactions={transactions}
