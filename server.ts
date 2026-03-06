@@ -25,6 +25,10 @@ async function getSqliteDb() {
 async function initDatabase() {
   if (usePostgres) {
     console.log("Using Vercel Postgres");
+    if (!process.env.POSTGRES_URL) {
+      console.error("CRITICAL: POSTGRES_URL is missing in environment variables!");
+      return;
+    }
     try {
       // 1. Ensure basic table exists
       await sql`
@@ -110,16 +114,30 @@ app.use(async (req, res, next) => {
   next();
 });
 
+// Price cache to handle quota issues
+let priceCache: { data: any, timestamp: number } | null = null;
+const CACHE_DURATION = 15000; // 15 seconds
+
+// Helper to get env var regardless of common casing
+const getEnv = (key: string) => process.env[key] || process.env[key.toLowerCase()] || process.env[key.charAt(0).toUpperCase() + key.slice(1).toLowerCase()];
+
 // API Routes
 app.get("/api/prices", async (req, res) => {
+    // Return cached data if valid
+    if (priceCache && Date.now() - priceCache.timestamp < CACHE_DURATION) {
+      return res.json(priceCache.data);
+    }
+
     try {
       // Strategy: 1. CoinGlass (if key exists) -> 2. Binance -> 3. CoinGecko
+      let priceData = null;
       
-      // 1. Try CoinGlass (Primary - if API key is configured)
-      if (process.env.COINGLASS_SECRET) {
+      // 1. Try CoinGlass
+      const cgSecret = getEnv("COINGLASS_SECRET") || process.env.Coinglass_secret;
+      if (cgSecret) {
         try {
           const response = await fetch("https://open-api.coinglass.com/public/v2/index/price", {
-            headers: { "coinglassSecret": process.env.COINGLASS_SECRET },
+            headers: { "coinglassSecret": cgSecret },
             signal: AbortSignal.timeout(5000)
           });
           
@@ -131,12 +149,11 @@ app.get("/api/prices", async (req, res) => {
               const relevantData = data.filter((item: any) => symbolsMap[item.symbol]);
               
               if (relevantData.length > 0) {
-                const mappedData = relevantData.map((item: any) => ({
+                priceData = relevantData.map((item: any) => ({
                   symbol: symbolsMap[item.symbol],
                   lastPrice: String(item.price),
                   priceChangePercent: String(item.changePercent24h || 0)
                 }));
-                return res.json(mappedData);
               }
             }
           }
@@ -145,61 +162,61 @@ app.get("/api/prices", async (req, res) => {
         }
       }
 
-      // 2. Try Binance (Secondary)
-      try {
-        const symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT"];
-        const url = `https://api.binance.com/api/v3/ticker/24hr?symbols=${encodeURIComponent(JSON.stringify(symbols))}`;
-        const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
-        if (response.ok) {
-          const data = await response.json();
-          if (Array.isArray(data)) {
-            return res.json(data);
-          }
-        }
-      } catch (e) {
-        console.warn("Binance.com failed, trying Binance.us...", e);
+      // 2. Try Binance
+      if (!priceData) {
         try {
           const symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT"];
-          const url = `https://api.binance.us/api/v3/ticker/24hr?symbols=${encodeURIComponent(JSON.stringify(symbols))}`;
+          const url = `https://api.binance.com/api/v3/ticker/24hr?symbols=${encodeURIComponent(JSON.stringify(symbols))}`;
           const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
           if (response.ok) {
             const data = await response.json();
-            if (Array.isArray(data)) return res.json(data);
+            if (Array.isArray(data)) priceData = data;
           }
-        } catch (e2) {
-          console.warn("Binance.us failed, trying CoinGecko...", e2);
-        }
-      }
-
-      // 3. Try CoinGecko (Tertiary)
-      try {
-        const response = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana&vs_currencies=usd&include_24hr_change=true", { signal: AbortSignal.timeout(5000) });
-        if (response.ok) {
-          const data = await response.json();
-          const mappedData = [
-            { 
-              symbol: "BTCUSDT", 
-              lastPrice: String(data.bitcoin.usd), 
-              priceChangePercent: String(data.bitcoin.usd_24h_change) 
-            },
-            { 
-              symbol: "ETHUSDT", 
-              lastPrice: String(data.ethereum.usd), 
-              priceChangePercent: String(data.ethereum.usd_24h_change) 
-            },
-            { 
-              symbol: "SOLUSDT", 
-              lastPrice: String(data.solana.usd), 
-              priceChangePercent: String(data.solana.usd_24h_change) 
+        } catch (e) {
+          console.warn("Binance.com failed, trying Binance.us...", e);
+          try {
+            const symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT"];
+            const url = `https://api.binance.us/api/v3/ticker/24hr?symbols=${encodeURIComponent(JSON.stringify(symbols))}`;
+            const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
+            if (response.ok) {
+              const data = await response.json();
+              if (Array.isArray(data)) priceData = data;
             }
-          ];
-          return res.json(mappedData);
+          } catch (e2) {
+            console.warn("Binance.us failed, trying CoinGecko...", e2);
+          }
         }
-      } catch (e) {
-        console.warn("CoinGecko failed final fallback", e);
       }
 
-      throw new Error("All price APIs failed");
+      // 3. Try CoinGecko
+      if (!priceData) {
+        try {
+          const response = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana&vs_currencies=usd&include_24hr_change=true", { signal: AbortSignal.timeout(5000) });
+          if (response.ok) {
+            const data = await response.json();
+            priceData = [
+              { symbol: "BTCUSDT", lastPrice: String(data.bitcoin.usd), priceChangePercent: String(data.bitcoin.usd_24h_change) },
+              { symbol: "ETHUSDT", lastPrice: String(data.ethereum.usd), priceChangePercent: String(data.ethereum.usd_24h_change) },
+              { symbol: "SOLUSDT", lastPrice: String(data.solana.usd), priceChangePercent: String(data.solana.usd_24h_change) }
+            ];
+          }
+        } catch (e) {
+          console.warn("CoinGecko failed final fallback", e);
+        }
+      }
+
+      if (priceData) {
+        priceCache = { data: priceData, timestamp: Date.now() };
+        return res.json(priceData);
+      }
+
+      // If all fail, return cache even if expired
+      if (priceCache) {
+        console.warn("All APIs failed, returning stale cache");
+        return res.json(priceCache.data);
+      }
+
+      throw new Error("All price APIs failed and no cache available");
     } catch (error) {
       console.error("Price fetch error:", error);
       res.status(500).json({ error: "Failed to fetch prices" });
@@ -215,6 +232,22 @@ app.get("/api/prices", async (req, res) => {
     } catch (error) {
       console.error("Exchange rate fetch error:", error);
       res.status(500).json({ error: "Failed to fetch exchange rate" });
+    }
+  });
+
+  app.post("/api/admin/reset-db", async (req, res) => {
+    try {
+      if (usePostgres) {
+        await sql`DROP TABLE IF EXISTS transactions`;
+      } else {
+        const db = await getSqliteDb();
+        if (db) db.exec("DROP TABLE IF EXISTS transactions");
+      }
+      dbInitialized = false; // Trigger re-init on next request
+      res.json({ success: true, message: "Database reset successfully" });
+    } catch (err) {
+      console.error("Reset DB error:", err);
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
@@ -451,23 +484,26 @@ app.get("/api/prices", async (req, res) => {
     }
   });
 
+// Vite middleware for development
+if (process.env.NODE_ENV !== "production") {
+  const vitePromise = createViteServer({
+    server: { middlewareMode: true },
+    appType: "spa",
+  });
+  app.use(async (req, res, next) => {
+    const vite = await vitePromise;
+    vite.middlewares(req, res, next);
+  });
+} else {
+  app.use(express.static("dist"));
+  app.get("*", (req, res, next) => {
+    if (req.path.startsWith("/api")) return next();
+    res.sendFile(path.resolve("dist/index.html"));
+  });
+}
+
 async function startServer() {
   const PORT = 3000;
-
-  // Vite middleware for development
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
-  } else {
-    app.use(express.static("dist"));
-    app.get("*", (req, res) => {
-      res.sendFile(path.resolve("dist/index.html"));
-    });
-  }
-
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
   });

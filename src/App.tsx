@@ -80,7 +80,7 @@ export default function App() {
       }
     } catch (error) {
       console.error("Failed to add transaction:", error);
-      alert("網路錯誤，請稍後再試");
+      alert(`網路錯誤: ${error instanceof Error ? error.message : '連線失敗'}。請檢查 Vercel Logs 或確認資料庫設定。`);
     }
   };
 
@@ -137,6 +137,7 @@ export default function App() {
       }
     } catch (error) {
       console.error("Failed to reset database:", error);
+      alert(`重置失敗: ${error instanceof Error ? error.message : '連線失敗'}`);
     }
   };
 
