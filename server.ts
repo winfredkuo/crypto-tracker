@@ -1,39 +1,14 @@
 import "dotenv/config";
 import express from "express";
-import { createServer as createViteServer } from "vite";
 import path from "path";
 import { sql } from "@vercel/postgres";
 
 // Helper to check if we should use Postgres
 const usePostgres = !!process.env.POSTGRES_URL || !!process.env.DATABASE_URL;
-const isProduction = process.env.NODE_ENV === "production";
-
-// Initialize SQLite lazily to avoid issues in environments where it's not supported
-let sqliteDb: any = null;
-
-async function getSqliteDb() {
-  if (isProduction) {
-    console.warn("SQLite is not supported in production (Vercel).");
-    return null;
-  }
-  if (!sqliteDb && !usePostgres) {
-    try {
-      const { default: Database } = await import("better-sqlite3");
-      sqliteDb = new Database("crypto_tracker.db");
-    } catch (err) {
-      console.warn("Failed to load better-sqlite3, local database will not be available.");
-    }
-  }
-  return sqliteDb;
-}
 
 async function initDatabase() {
   if (usePostgres) {
     console.log("Using Vercel Postgres");
-    if (!process.env.POSTGRES_URL) {
-      console.error("CRITICAL: POSTGRES_URL is missing in environment variables!");
-      return;
-    }
     try {
       // 1. Ensure basic table exists
       await sql`
@@ -57,7 +32,6 @@ async function initDatabase() {
       `;
 
       // 2. Migration: Add missing columns if they don't exist
-      // We use a series of ALTER TABLE statements
       const migrations = [
         "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS from_asset TEXT",
         "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS to_asset TEXT",
@@ -71,7 +45,7 @@ async function initDatabase() {
         try {
           await sql.query(query);
         } catch (e) {
-          // Ignore errors if column already exists or other minor issues
+          // Ignore errors
         }
       }
 
@@ -80,29 +54,7 @@ async function initDatabase() {
       console.error("Postgres init error:", err);
     }
   } else {
-    const db = await getSqliteDb();
-    if (db) {
-      console.log("Using local SQLite");
-      db.exec(`
-        CREATE TABLE IF NOT EXISTS transactions (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          type TEXT,
-          asset TEXT,
-          pair TEXT,
-          amount REAL,
-          price REAL,
-          exchange_rate REAL,
-          remaining_amount REAL,
-          realized_profit REAL DEFAULT 0,
-          from_asset TEXT,
-          to_asset TEXT,
-          from_amount REAL,
-          to_amount REAL,
-          asset_exchange_rate REAL,
-          timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-      `);
-    }
+    console.warn("POSTGRES_URL is missing. Database will not be available in production.");
   }
 }
 
@@ -510,14 +462,15 @@ app.use((err: any, req: any, res: any, next: any) => {
 
 // Vite middleware for development
 if (process.env.NODE_ENV !== "production") {
-  const vitePromise = createViteServer({
-    server: { middlewareMode: true },
-    appType: "spa",
-  });
-  app.use(async (req, res, next) => {
-    const vite = await vitePromise;
-    vite.middlewares(req, res, next);
-  });
+  const setupVite = async () => {
+    const { createServer: createViteServer } = await import("vite");
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: "spa",
+    });
+    app.use(vite.middlewares);
+  };
+  setupVite();
 } else {
   app.use(express.static("dist"));
   app.get("*", (req, res, next) => {
