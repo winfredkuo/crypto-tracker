@@ -1,7 +1,8 @@
 import "dotenv/config";
 import express from "express";
 import path from "path";
-import { createClient } from "@vercel/postgres";
+import pg from "pg";
+const { Client } = pg;
 
 // Helper to check if we should use Postgres
 const usePostgres = !!process.env.POSTGRES_URL || !!process.env.DATABASE_URL || !!process.env.POSTGRES_URL_NON_POOLING;
@@ -9,12 +10,23 @@ const usePostgres = !!process.env.POSTGRES_URL || !!process.env.DATABASE_URL || 
 const getDbClient = async () => {
   let connectionString = process.env.POSTGRES_URL_NON_POOLING || process.env.POSTGRES_URL || process.env.DATABASE_URL;
   
-  if (connectionString && connectionString.startsWith("postgres://")) {
+  if (!connectionString) {
+    throw new Error("No database connection string found in environment variables.");
+  }
+
+  // Diagnostic log (masked)
+  const maskedConn = connectionString.replace(/:([^@]+)@/, ":****@");
+  console.log(`Attempting to connect to DB with string starting with: ${connectionString.substring(0, 10)}...`);
+  console.log(`Masked connection string: ${maskedConn.substring(0, 50)}...`);
+
+  if (connectionString.startsWith("postgres://")) {
     connectionString = connectionString.replace("postgres://", "postgresql://");
   }
 
-  const client = createClient({
-    connectionString: connectionString
+  // Use standard pg Client for better reliability across environments
+  const client = new Client({
+    connectionString: connectionString,
+    ssl: connectionString.includes("sslmode=require") || !connectionString.includes("localhost") ? { rejectUnauthorized: false } : false
   });
   
   await client.connect();
@@ -76,6 +88,13 @@ async function initDatabase() {
 }
 
 const app = express();
+
+// Request logging middleware
+app.use((req, res, next) => {
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
+  next();
+});
+
 app.use(express.json());
 
 // Ensure DB is initialized only for routes that need it
@@ -418,19 +437,29 @@ app.use((err: any, req: any, res: any, next: any) => {
 // Vite middleware for development
 if (process.env.NODE_ENV !== "production") {
   const setupVite = async () => {
-    const { createServer: createViteServer } = await import("vite");
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
+    try {
+      const { createServer: createViteServer } = await import("vite");
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: "spa",
+      });
+      app.use(vite.middlewares);
+    } catch (e) {
+      console.error("Vite setup error:", e);
+    }
   };
   setupVite();
 } else {
-  app.use(express.static("dist"));
-  app.get("*", (req, res, next) => {
-    if (req.path.startsWith("/api")) return next();
-    res.sendFile(path.resolve("dist/index.html"));
+  // In production, serve static files from dist
+  const distPath = path.resolve("dist");
+  app.use(express.static(distPath));
+  
+  // SPA fallback - MUST be after API routes
+  app.get("*", (req, res) => {
+    if (req.path.startsWith("/api")) {
+      return res.status(404).json({ error: "API route not found" });
+    }
+    res.sendFile(path.join(distPath, "index.html"));
   });
 }
 
