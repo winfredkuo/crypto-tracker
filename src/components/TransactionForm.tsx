@@ -67,20 +67,42 @@ export default function TransactionForm({ onAdd, onUpdate, currentExchangeRate, 
     }
   }, [editData, templateData, currentExchangeRate]);
 
-  // Auto-calculate price from total cost and amount
-  useEffect(() => {
-    const amt = parseFloat(amount);
-    const total = parseFloat(totalCost);
+  // Auto-calculate logic
+  const handleAmountChange = (val: string) => {
+    setAmount(val);
+    const a = parseFloat(val);
+    const p = parseFloat(price);
+    const t = parseFloat(totalCost);
     const rate = parseFloat(exchangeRate);
-    if (amt > 0 && total > 0 && rate > 0) {
-      // If pair is TWD, total is in TWD. We need USDT price.
-      const totalUSDT = pair === 'TWD' ? total / rate : total;
-      const calculatedPrice = totalUSDT / amt;
+
+    if (a > 0) {
+      if (p > 0) {
+        // Update total cost based on price
+        const totalUSDT = a * p;
+        const totalDisplay = pair === 'TWD' ? totalUSDT * rate : totalUSDT;
+        setTotalCost(totalDisplay.toFixed(2).replace(/\.?0+$/, ''));
+      } else if (t > 0) {
+        // Update price based on total cost
+        const totalUSDT = pair === 'TWD' ? t / rate : t;
+        const calculatedPrice = totalUSDT / a;
+        setPrice(calculatedPrice.toFixed(8).replace(/\.?0+$/, ''));
+      }
+    }
+  };
+
+  const handleTotalCostChange = (val: string) => {
+    setTotalCost(val);
+    const t = parseFloat(val);
+    const a = parseFloat(amount);
+    const rate = parseFloat(exchangeRate);
+
+    if (t > 0 && a > 0 && rate > 0) {
+      const totalUSDT = pair === 'TWD' ? t / rate : t;
+      const calculatedPrice = totalUSDT / a;
       setPrice(calculatedPrice.toFixed(8).replace(/\.?0+$/, ''));
     }
-  }, [totalCost, amount, pair, exchangeRate]);
+  };
 
-  // Auto-calculate total cost from price and amount
   const handlePriceChange = (val: string) => {
     setPrice(val);
     const p = parseFloat(val); // Price in USDT
@@ -89,6 +111,50 @@ export default function TransactionForm({ onAdd, onUpdate, currentExchangeRate, 
     if (p > 0 && a > 0 && rate > 0) {
       const totalUSDT = p * a;
       const totalDisplay = pair === 'TWD' ? totalUSDT * rate : totalUSDT;
+      setTotalCost(totalDisplay.toFixed(2).replace(/\.?0+$/, ''));
+    }
+  };
+
+  const handleExchangeRateChange = (val: string) => {
+    setExchangeRate(val);
+    const rate = parseFloat(val);
+    const t = parseFloat(totalCost);
+    const a = parseFloat(amount);
+    const p = parseFloat(price);
+
+    if (rate > 0 && pair === 'TWD') {
+      if (a > 0 && t > 0) {
+        // Update price based on TWD total and new rate
+        const totalUSDT = t / rate;
+        const calculatedPrice = totalUSDT / a;
+        setPrice(calculatedPrice.toFixed(8).replace(/\.?0+$/, ''));
+      } else if (a > 0 && p > 0) {
+        // Update total cost based on price and new rate
+        const totalUSDT = a * p;
+        setTotalCost((totalUSDT * rate).toFixed(2).replace(/\.?0+$/, ''));
+      }
+    }
+  };
+
+  const handlePairChange = (newPair: Pair) => {
+    setPair(newPair);
+    const t = parseFloat(totalCost);
+    const p = parseFloat(price);
+    const a = parseFloat(amount);
+    const rate = parseFloat(exchangeRate);
+
+    if (t > 0 && rate > 0) {
+      if (newPair === 'TWD') {
+        // Was USDT, now TWD
+        setTotalCost((t * rate).toFixed(2).replace(/\.?0+$/, ''));
+      } else {
+        // Was TWD, now USDT
+        setTotalCost((t / rate).toFixed(2).replace(/\.?0+$/, ''));
+      }
+    } else if (p > 0 && a > 0 && rate > 0) {
+      // Recalculate total cost from price and amount
+      const totalUSDT = p * a;
+      const totalDisplay = newPair === 'TWD' ? totalUSDT * rate : totalUSDT;
       setTotalCost(totalDisplay.toFixed(2).replace(/\.?0+$/, ''));
     }
   };
@@ -230,7 +296,7 @@ export default function TransactionForm({ onAdd, onUpdate, currentExchangeRate, 
             type="number" 
             step="any"
             value={exchangeRate}
-            onChange={(e) => setExchangeRate(e.target.value)}
+            onChange={(e) => handleExchangeRateChange(e.target.value)}
             className="w-full p-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
           />
         </div>
@@ -352,7 +418,7 @@ export default function TransactionForm({ onAdd, onUpdate, currentExchangeRate, 
               <label className="block text-xs font-medium text-gray-500 uppercase mb-1">支付幣種</label>
               <select 
                 value={pair} 
-                onChange={(e) => setPair(e.target.value as Pair)}
+                onChange={(e) => handlePairChange(e.target.value as Pair)}
                 className="w-full p-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
               >
                 <option value="USDT">USDT</option>
@@ -369,7 +435,7 @@ export default function TransactionForm({ onAdd, onUpdate, currentExchangeRate, 
                   type="number" 
                   step="any"
                   value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
+                  onChange={(e) => handleAmountChange(e.target.value)}
                   placeholder="0.00"
                   className="w-full p-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-sm"
                   required
@@ -382,7 +448,7 @@ export default function TransactionForm({ onAdd, onUpdate, currentExchangeRate, 
                 type="number" 
                 step="any"
                 value={totalCost}
-                onChange={(e) => setTotalCost(e.target.value)}
+                onChange={(e) => handleTotalCostChange(e.target.value)}
                 placeholder="0.00"
                 className="w-full p-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-sm"
               />
