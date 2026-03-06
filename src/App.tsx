@@ -22,20 +22,30 @@ export default function App() {
 
   const loadData = async () => {
     try {
-      const [txRes, priceData, rate] = await Promise.all([
-        fetch('/api/transactions'),
-        fetchPrices(),
-        fetchUSDTTWD()
-      ]);
-      
+      // Fetch transactions first as they are critical
+      const txRes = await fetch('/api/transactions');
       if (txRes.ok) {
         const txs = await txRes.json();
         setTransactions(txs);
       }
-      setPrices(priceData);
-      setUsdtTwd(rate);
+
+      // Fetch prices and exchange rate independently
+      try {
+        const priceData = await fetchPrices();
+        setPrices(priceData);
+      } catch (e) {
+        console.warn("Failed to fetch prices:", e);
+      }
+
+      try {
+        const rate = await fetchUSDTTWD();
+        setUsdtTwd(rate);
+      } catch (e) {
+        console.warn("Failed to fetch exchange rate:", e);
+      }
+      
     } catch (error) {
-      console.error("Failed to load data:", error);
+      console.error("Failed to load critical data:", error);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -63,9 +73,14 @@ export default function App() {
         setTemplateTransaction(null);
         setIsModalOpen(false);
         loadData();
+      } else {
+        const errorData = await res.json();
+        console.error("Server error details:", errorData);
+        alert(`儲存失敗: ${errorData.error || '資料庫連線異常，請確認 Vercel Postgres 已正確配置'}`);
       }
     } catch (error) {
       console.error("Failed to add transaction:", error);
+      alert("網路錯誤，請稍後再試");
     }
   };
 
@@ -80,9 +95,13 @@ export default function App() {
         setEditingTransaction(null);
         setIsModalOpen(false);
         loadData();
+      } else {
+        const errorData = await res.json();
+        alert(`更新失敗: ${errorData.error || '未知錯誤'}`);
       }
     } catch (error) {
       console.error("Failed to update transaction:", error);
+      alert("網路錯誤，請稍後再試");
     }
   };
 
@@ -106,6 +125,19 @@ export default function App() {
     setEditingTransaction(null);
     setTemplateTransaction(null);
     setIsModalOpen(true);
+  };
+
+  const handleResetDatabase = async () => {
+    if (!confirm("確定要清除所有交易紀錄嗎？此操作無法復原。")) return;
+    try {
+      const res = await fetch('/api/admin/reset-db', { method: 'POST' });
+      if (res.ok) {
+        alert("資料庫已重置");
+        loadData();
+      }
+    } catch (error) {
+      console.error("Failed to reset database:", error);
+    }
   };
 
   if (loading) {
@@ -194,6 +226,7 @@ export default function App() {
               transactions={transactions}
               prices={prices}
               usdtTwd={usdtTwd}
+              onReset={handleResetDatabase}
             />
           </div>
 
