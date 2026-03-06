@@ -5,12 +5,17 @@ import path from "path";
 import { sql } from "@vercel/postgres";
 
 // Helper to check if we should use Postgres
-const usePostgres = !!process.env.POSTGRES_URL;
+const usePostgres = !!process.env.POSTGRES_URL || !!process.env.DATABASE_URL;
+const isProduction = process.env.NODE_ENV === "production";
 
 // Initialize SQLite lazily to avoid issues in environments where it's not supported
 let sqliteDb: any = null;
 
 async function getSqliteDb() {
+  if (isProduction) {
+    console.warn("SQLite is not supported in production (Vercel).");
+    return null;
+  }
   if (!sqliteDb && !usePostgres) {
     try {
       const { default: Database } = await import("better-sqlite3");
@@ -122,6 +127,15 @@ const CACHE_DURATION = 15000; // 15 seconds
 const getEnv = (key: string) => process.env[key] || process.env[key.toLowerCase()] || process.env[key.charAt(0).toUpperCase() + key.slice(1).toLowerCase()];
 
 // API Routes
+app.get("/api/debug/env", (req, res) => {
+  res.json({
+    hasPostgresUrl: !!process.env.POSTGRES_URL,
+    hasDatabaseUrl: !!process.env.DATABASE_URL,
+    nodeEnv: process.env.NODE_ENV,
+    usePostgres: usePostgres
+  });
+});
+
 app.get("/api/prices", async (req, res) => {
     // Return cached data if valid
     if (priceCache && Date.now() - priceCache.timestamp < CACHE_DURATION) {
