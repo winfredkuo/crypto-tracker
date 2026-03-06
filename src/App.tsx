@@ -7,6 +7,7 @@ import TransactionForm from './components/TransactionForm';
 import SidebarSummary from './components/SidebarSummary';
 import MarketInsights from './components/MarketInsights';
 import Modal from './components/Modal';
+import DbCheck from './components/DbCheck';
 import { RefreshCw, LayoutDashboard, Plus, PlusCircle, ArrowRightLeft } from 'lucide-react';
 
 export default function App() {
@@ -173,6 +174,7 @@ export default function App() {
           </div>
           
           <div className="flex items-center gap-4">
+            <DbCheck />
             <button 
               onClick={handleRefresh}
               disabled={refreshing}

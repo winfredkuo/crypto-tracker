@@ -1,36 +1,30 @@
 import "dotenv/config";
 import express from "express";
 import path from "path";
-import pkg from "pg";
-const { Client } = pkg;
+import pg from "pg";
+const { Client } = pg;
 
 // Helper to check if we should use Postgres
 const usePostgres = !!process.env.POSTGRES_URL || !!process.env.DATABASE_URL || !!process.env.POSTGRES_URL_NON_POOLING;
 
 const getDbClient = async () => {
-  let connectionString = process.env.POSTGRES_URL_NON_POOLING || process.env.POSTGRES_URL || process.env.DATABASE_URL;
+  const connectionString = process.env.POSTGRES_URL_NON_POOLING || process.env.POSTGRES_URL || process.env.DATABASE_URL;
   
   if (!connectionString) {
     throw new Error("No database connection string found in environment variables.");
   }
 
-  // Check for Prisma Accelerate URL which is incompatible with standard pg driver
   if (connectionString.startsWith("prisma://")) {
-    throw new Error("Detected a Prisma Accelerate URL (prisma://). This application requires a standard PostgreSQL connection string (postgres:// or postgresql://). Please update your environment variables in Vercel.");
+    throw new Error("CRITICAL: Your POSTGRES_URL is a Prisma Accelerate URL (prisma://). Vercel Postgres does NOT support Prisma URLs. Please go to Vercel Project Settings -> Storage -> Connect Database to get a standard postgres:// URL.");
   }
 
-  // Diagnostic log (masked)
-  const maskedConn = connectionString.replace(/:([^@]+)@/, ":****@");
-  console.log(`Attempting to connect to DB with string starting with: ${connectionString.substring(0, 10)}...`);
-  
-  if (connectionString.startsWith("postgres://")) {
-    connectionString = connectionString.replace("postgres://", "postgresql://");
-  }
+  console.log(`Connecting to DB (Type: ${connectionString.split(':')[0]})...`);
 
-  // Use standard pg Client
   const client = new Client({
     connectionString: connectionString,
-    ssl: connectionString.includes("sslmode=require") || !connectionString.includes("localhost") ? { rejectUnauthorized: false } : false
+    ssl: {
+      rejectUnauthorized: false // Required for Vercel/Neon Postgres
+    }
   });
   
   await client.connect();
@@ -100,6 +94,47 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json());
+
+// Database diagnostics endpoint
+app.get("/api/db-diagnostics", async (req, res) => {
+  const connectionString = process.env.POSTGRES_URL_NON_POOLING || process.env.POSTGRES_URL || process.env.DATABASE_URL;
+  
+  const diagnostics = {
+    env: {
+      POSTGRES_URL: !!process.env.POSTGRES_URL,
+      POSTGRES_URL_NON_POOLING: !!process.env.POSTGRES_URL_NON_POOLING,
+      DATABASE_URL: !!process.env.DATABASE_URL,
+    },
+    connection: {
+      exists: !!connectionString,
+      protocol: connectionString ? connectionString.split(':')[0] : null,
+      isPrisma: connectionString ? connectionString.startsWith("prisma://") : false,
+      maskedUrl: connectionString ? connectionString.replace(/:([^@]+)@/, ":****@").substring(0, 50) + "..." : null,
+    },
+    status: "unknown",
+    error: null as string | null
+  };
+
+  if (!connectionString) {
+    diagnostics.status = "error";
+    diagnostics.error = "No connection string found";
+    return res.json(diagnostics);
+  }
+
+  try {
+    const client = await getDbClient();
+    const result = await client.query("SELECT NOW() as now, version()");
+    await client.end();
+    diagnostics.status = "connected";
+    (diagnostics as any).dbTime = result.rows[0].now;
+    (diagnostics as any).dbVersion = result.rows[0].version;
+  } catch (err: any) {
+    diagnostics.status = "failed";
+    diagnostics.error = err.message;
+  }
+
+  res.json(diagnostics);
+});
 
 // Ensure DB is initialized only for routes that need it
 let dbInitialized = false;
