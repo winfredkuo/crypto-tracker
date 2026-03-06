@@ -1,29 +1,20 @@
 import "dotenv/config";
 import express from "express";
 import path from "path";
-import { createRequire } from "module";
-
-const require = createRequire(import.meta.url);
-const { Client } = require("pg");
+import { createClient } from "@vercel/postgres";
 
 // Helper to check if we should use Postgres
 const usePostgres = !!process.env.POSTGRES_URL || !!process.env.DATABASE_URL || !!process.env.POSTGRES_URL_NON_POOLING;
 
 const getDbClient = async () => {
-  const connectionString = process.env.POSTGRES_URL_NON_POOLING || process.env.POSTGRES_URL || process.env.DATABASE_URL;
-  const client = new Client({
-    connectionString,
-    ssl: {
-      rejectUnauthorized: false
-    }
-  });
+  const client = createClient();
   await client.connect();
   return client;
 };
 
 async function initDatabase() {
   if (usePostgres) {
-    console.log("Using Vercel Postgres (via pg)");
+    console.log("Using Vercel Postgres (@vercel/postgres)");
     try {
       const client = await getDbClient();
       // 1. Ensure basic table exists
