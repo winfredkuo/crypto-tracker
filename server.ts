@@ -26,13 +26,13 @@ async function initDatabase() {
   if (usePostgres) {
     console.log("Using Vercel Postgres");
     try {
-      // Create table in Postgres
+      // 1. Ensure basic table exists
       await sql`
         CREATE TABLE IF NOT EXISTS transactions (
           id SERIAL PRIMARY KEY,
-          type TEXT CHECK(type IN ('BUY', 'SELL', 'EXCHANGE')),
+          type TEXT,
           asset TEXT,
-          pair TEXT CHECK(pair IN ('TWD', 'USDT')),
+          pair TEXT,
           amount DOUBLE PRECISION,
           price DOUBLE PRECISION,
           exchange_rate DOUBLE PRECISION,
@@ -46,7 +46,27 @@ async function initDatabase() {
           timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
       `;
-      console.log("Postgres table ensured");
+
+      // 2. Migration: Add missing columns if they don't exist
+      // We use a series of ALTER TABLE statements
+      const migrations = [
+        "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS from_asset TEXT",
+        "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS to_asset TEXT",
+        "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS from_amount DOUBLE PRECISION",
+        "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS to_amount DOUBLE PRECISION",
+        "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS asset_exchange_rate DOUBLE PRECISION",
+        "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS realized_profit DOUBLE PRECISION DEFAULT 0"
+      ];
+
+      for (const query of migrations) {
+        try {
+          await sql.query(query);
+        } catch (e) {
+          // Ignore errors if column already exists or other minor issues
+        }
+      }
+
+      console.log("Postgres table ensured and migrated");
     } catch (err) {
       console.error("Postgres init error:", err);
     }
@@ -57,9 +77,9 @@ async function initDatabase() {
       db.exec(`
         CREATE TABLE IF NOT EXISTS transactions (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
-          type TEXT CHECK(type IN ('BUY', 'SELL', 'EXCHANGE')),
+          type TEXT,
           asset TEXT,
-          pair TEXT CHECK(pair IN ('TWD', 'USDT')),
+          pair TEXT,
           amount REAL,
           price REAL,
           exchange_rate REAL,
@@ -235,21 +255,32 @@ app.get("/api/prices", async (req, res) => {
   app.post("/api/transactions", async (req, res) => {
     const { type, asset, pair, amount, price, exchangeRate, fromAsset, toAsset, fromAmount, toAmount, assetExchangeRate } = req.body;
     
+    console.log(`Incoming transaction: ${type}`, req.body);
+
     try {
+      // Sanitize numeric inputs to prevent NaN errors in Postgres
+      const safeAmount = parseFloat(amount) || 0;
+      const safePrice = parseFloat(price) || 0;
+      const safeExchangeRate = parseFloat(exchangeRate) || 0;
+      const safeFromAmount = parseFloat(fromAmount) || 0;
+      const safeToAmount = parseFloat(toAmount) || 0;
+      const safeAssetExchangeRate = parseFloat(assetExchangeRate) || 0;
+
       if (type === 'BUY') {
           if (usePostgres) {
             const { rows } = await sql`
               INSERT INTO transactions (type, asset, pair, amount, price, exchange_rate, remaining_amount) 
-              VALUES (${type}, ${asset}, ${pair}, ${amount}, ${price}, ${exchangeRate}, ${amount})
+              VALUES (${type}, ${asset}, ${pair}, ${safeAmount}, ${safePrice}, ${safeExchangeRate}, ${safeAmount})
               RETURNING id
             `;
+            console.log("BUY transaction saved to Postgres, ID:", rows[0].id);
             return res.json({ id: rows[0].id });
           } else {
             const db = await getSqliteDb();
             if (!db) throw new Error("Database not available");
             const info = db.prepare(
               "INSERT INTO transactions (type, asset, pair, amount, price, exchange_rate, remaining_amount) VALUES (?, ?, ?, ?, ?, ?, ?)"
-            ).run(type, asset, pair, amount, price, exchangeRate, amount);
+            ).run(type, asset, pair, safeAmount, safePrice, safeExchangeRate, safeAmount);
             return res.json({ id: info.lastInsertRowid });
           }
         }
@@ -257,7 +288,7 @@ app.get("/api/prices", async (req, res) => {
         if (type === 'SELL') {
           const { selectedLots } = req.body;
           let totalProfit = 0;
-          const sellPriceInUSDT = pair === 'USDT' ? price : price / exchangeRate;
+          const sellPriceInUSDT = pair === 'USDT' ? safePrice : safePrice / (safeExchangeRate || 1);
   
           if (selectedLots && Array.isArray(selectedLots) && selectedLots.length > 0) {
             for (const lotSelection of selectedLots) {
@@ -272,7 +303,7 @@ app.get("/api/prices", async (req, res) => {
   
               if (!buy || buy.remaining_amount < lotSelection.amount) continue;
   
-              const buyPriceInUSDT = buy.pair === 'USDT' ? buy.price : buy.price / buy.exchange_rate;
+              const buyPriceInUSDT = buy.pair === 'USDT' ? buy.price : buy.price / (buy.exchange_rate || 1);
               const profitFromThisLot = lotSelection.amount * (sellPriceInUSDT - buyPriceInUSDT);
               
               if (usePostgres) {
@@ -303,10 +334,10 @@ app.get("/api/prices", async (req, res) => {
               buys = db ? db.prepare("SELECT * FROM transactions WHERE type = 'BUY' AND asset = ? AND remaining_amount > 0 ORDER BY timestamp ASC").all(asset) : [];
             }
   
-            let sellAmount = amount;
+            let sellAmount = safeAmount;
             for (const buy of buys) {
               if (sellAmount <= 0) break;
-              const buyPriceInUSDT = buy.pair === 'USDT' ? buy.price : buy.price / buy.exchange_rate;
+              const buyPriceInUSDT = buy.pair === 'USDT' ? buy.price : buy.price / (buy.exchange_rate || 1);
               const consume = Math.min(sellAmount, buy.remaining_amount);
               const profitFromThisLot = consume * (sellPriceInUSDT - buyPriceInUSDT);
               
@@ -333,16 +364,17 @@ app.get("/api/prices", async (req, res) => {
           if (usePostgres) {
             const { rows } = await sql`
               INSERT INTO transactions (type, asset, pair, amount, price, exchange_rate, realized_profit) 
-              VALUES (${type}, ${asset}, ${pair}, ${amount}, ${price}, ${exchangeRate}, ${totalProfit})
+              VALUES (${type}, ${asset}, ${pair}, ${safeAmount}, ${safePrice}, ${safeExchangeRate}, ${totalProfit})
               RETURNING id
             `;
+            console.log("SELL transaction saved to Postgres, ID:", rows[0].id);
             return res.json({ id: rows[0].id });
           } else {
             const db = await getSqliteDb();
             if (!db) throw new Error("Database not available");
             const info = db.prepare(
               "INSERT INTO transactions (type, asset, pair, amount, price, exchange_rate, realized_profit) VALUES (?, ?, ?, ?, ?, ?, ?)"
-            ).run(type, asset, pair, amount, price, exchangeRate, totalProfit);
+            ).run(type, asset, pair, safeAmount, safePrice, safeExchangeRate, totalProfit);
             return res.json({ id: info.lastInsertRowid });
           }
         }
@@ -351,22 +383,24 @@ app.get("/api/prices", async (req, res) => {
           if (usePostgres) {
             const { rows } = await sql`
               INSERT INTO transactions (type, from_asset, to_asset, from_amount, to_amount, asset_exchange_rate) 
-              VALUES (${type}, ${fromAsset}, ${toAsset}, ${fromAmount}, ${toAmount}, ${assetExchangeRate})
+              VALUES (${type}, ${fromAsset}, ${toAsset}, ${safeFromAmount}, ${safeToAmount}, ${safeAssetExchangeRate})
               RETURNING id
             `;
+            console.log("EXCHANGE transaction saved to Postgres, ID:", rows[0].id);
             return res.json({ id: rows[0].id });
           } else {
             const db = await getSqliteDb();
             if (!db) throw new Error("Database not available");
             const info = db.prepare(
               "INSERT INTO transactions (type, from_asset, to_asset, from_amount, to_amount, asset_exchange_rate) VALUES (?, ?, ?, ?, ?, ?)"
-            ).run(type, fromAsset, toAsset, fromAmount, toAmount, assetExchangeRate);
+            ).run(type, fromAsset, toAsset, safeFromAmount, safeToAmount, safeAssetExchangeRate);
             return res.json({ id: info.lastInsertRowid });
           }
         }
 
       res.status(400).json({ error: "Invalid transaction type" });
     } catch (err) {
+      console.error("Transaction save error:", err);
       res.status(500).json({ error: (err as Error).message });
     }
   });
