@@ -1,17 +1,32 @@
 import "dotenv/config";
 import express from "express";
 import path from "path";
-import { sql } from "@vercel/postgres";
+import pg from "pg";
+
+const { Client } = pg;
 
 // Helper to check if we should use Postgres
-const usePostgres = !!process.env.POSTGRES_URL || !!process.env.DATABASE_URL;
+const usePostgres = !!process.env.POSTGRES_URL || !!process.env.DATABASE_URL || !!process.env.POSTGRES_URL_NON_POOLING;
+
+const getDbClient = async () => {
+  const connectionString = process.env.POSTGRES_URL_NON_POOLING || process.env.POSTGRES_URL || process.env.DATABASE_URL;
+  const client = new Client({
+    connectionString,
+    ssl: {
+      rejectUnauthorized: false
+    }
+  });
+  await client.connect();
+  return client;
+};
 
 async function initDatabase() {
   if (usePostgres) {
-    console.log("Using Vercel Postgres");
+    console.log("Using Vercel Postgres (via pg)");
     try {
+      const client = await getDbClient();
       // 1. Ensure basic table exists
-      await sql`
+      await client.query(`
         CREATE TABLE IF NOT EXISTS transactions (
           id SERIAL PRIMARY KEY,
           type TEXT,
@@ -29,7 +44,7 @@ async function initDatabase() {
           asset_exchange_rate DOUBLE PRECISION,
           timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
-      `;
+      `);
 
       // 2. Migration: Add missing columns if they don't exist
       const migrations = [
@@ -43,12 +58,13 @@ async function initDatabase() {
 
       for (const query of migrations) {
         try {
-          await sql.query(query);
+          await client.query(query);
         } catch (e) {
           // Ignore errors
         }
       }
 
+      await client.end();
       console.log("Postgres table ensured and migrated");
     } catch (err) {
       console.error("Postgres init error:", err);
@@ -80,9 +96,14 @@ const getEnv = (key: string) => process.env[key] || process.env[key.toLowerCase(
 
 // API Routes
 app.get("/api/debug/env", (req, res) => {
+  const mask = (str: string | undefined) => str ? `${str.substring(0, 12)}...` : "missing";
   res.json({
     hasPostgresUrl: !!process.env.POSTGRES_URL,
     hasDatabaseUrl: !!process.env.DATABASE_URL,
+    hasNonPoolingUrl: !!process.env.POSTGRES_URL_NON_POOLING,
+    postgresUrl: mask(process.env.POSTGRES_URL),
+    databaseUrl: mask(process.env.DATABASE_URL),
+    nonPoolingUrl: mask(process.env.POSTGRES_URL_NON_POOLING),
     nodeEnv: process.env.NODE_ENV,
     usePostgres: usePostgres
   });
@@ -204,7 +225,9 @@ app.get("/api/prices", async (req, res) => {
   app.post("/api/admin/reset-db", async (req, res) => {
     try {
       if (usePostgres) {
-        await sql`DROP TABLE IF EXISTS transactions`;
+        const client = await getDbClient();
+        await client.query('DROP TABLE IF EXISTS transactions');
+        await client.end();
         dbInitialized = false; // Trigger re-init on next request
         res.json({ success: true, message: "Database reset successfully" });
       } else {
@@ -220,8 +243,10 @@ app.get("/api/prices", async (req, res) => {
     try {
       let transactions = [];
       if (usePostgres) {
-        const { rows } = await sql`SELECT * FROM transactions ORDER BY timestamp DESC`;
+        const client = await getDbClient();
+        const { rows } = await client.query('SELECT * FROM transactions ORDER BY timestamp DESC');
         transactions = rows;
+        await client.end();
       }
 
       const mapped = transactions.map((t: any) => ({
@@ -263,11 +288,12 @@ app.get("/api/prices", async (req, res) => {
 
       if (type === 'BUY') {
           if (usePostgres) {
-            const { rows } = await sql`
-              INSERT INTO transactions (type, asset, pair, amount, price, exchange_rate, remaining_amount) 
-              VALUES (${type}, ${asset}, ${pair}, ${safeAmount}, ${safePrice}, ${safeExchangeRate}, ${safeAmount})
-              RETURNING id
-            `;
+            const client = await getDbClient();
+            const { rows } = await client.query(
+              'INSERT INTO transactions (type, asset, pair, amount, price, exchange_rate, remaining_amount) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id',
+              [type, asset, pair, safeAmount, safePrice, safeExchangeRate, safeAmount]
+            );
+            await client.end();
             console.log("BUY transaction saved to Postgres, ID:", rows[0].id);
             return res.json({ id: rows[0].id });
           } else {
@@ -284,8 +310,10 @@ app.get("/api/prices", async (req, res) => {
             for (const lotSelection of selectedLots) {
               let buy;
               if (usePostgres) {
-                const { rows } = await sql`SELECT * FROM transactions WHERE id = ${lotSelection.id}`;
+                const client = await getDbClient();
+                const { rows } = await client.query('SELECT * FROM transactions WHERE id = $1', [lotSelection.id]);
                 buy = rows[0];
+                await client.end();
               }
   
               if (!buy || buy.remaining_amount < lotSelection.amount) continue;
@@ -294,12 +322,12 @@ app.get("/api/prices", async (req, res) => {
               const profitFromThisLot = lotSelection.amount * (sellPriceInUSDT - buyPriceInUSDT);
               
               if (usePostgres) {
-                await sql`
-                  UPDATE transactions 
-                  SET remaining_amount = remaining_amount - ${lotSelection.amount}, 
-                      realized_profit = realized_profit + ${profitFromThisLot} 
-                  WHERE id = ${buy.id}
-                `;
+                const client = await getDbClient();
+                await client.query(
+                  'UPDATE transactions SET remaining_amount = remaining_amount - $1, realized_profit = realized_profit + $2 WHERE id = $3',
+                  [lotSelection.amount, profitFromThisLot, buy.id]
+                );
+                await client.end();
               }
               
               totalProfit += profitFromThisLot;
@@ -308,8 +336,10 @@ app.get("/api/prices", async (req, res) => {
             // FIFO Fallback
             let buys = [];
             if (usePostgres) {
-              const { rows } = await sql`SELECT * FROM transactions WHERE type = 'BUY' AND asset = ${asset} AND remaining_amount > 0 ORDER BY timestamp ASC`;
+              const client = await getDbClient();
+              const { rows } = await client.query("SELECT * FROM transactions WHERE type = 'BUY' AND asset = $1 AND remaining_amount > 0 ORDER BY timestamp ASC", [asset]);
               buys = rows;
+              await client.end();
             }
   
             let sellAmount = safeAmount;
@@ -320,12 +350,12 @@ app.get("/api/prices", async (req, res) => {
               const profitFromThisLot = consume * (sellPriceInUSDT - buyPriceInUSDT);
               
               if (usePostgres) {
-                await sql`
-                  UPDATE transactions 
-                  SET remaining_amount = remaining_amount - ${consume}, 
-                      realized_profit = realized_profit + ${profitFromThisLot} 
-                  WHERE id = ${buy.id}
-                `;
+                const client = await getDbClient();
+                await client.query(
+                  'UPDATE transactions SET remaining_amount = remaining_amount - $1, realized_profit = realized_profit + $2 WHERE id = $3',
+                  [consume, profitFromThisLot, buy.id]
+                );
+                await client.end();
               }
               
               totalProfit += profitFromThisLot;
@@ -334,11 +364,12 @@ app.get("/api/prices", async (req, res) => {
           }
   
           if (usePostgres) {
-            const { rows } = await sql`
-              INSERT INTO transactions (type, asset, pair, amount, price, exchange_rate, realized_profit) 
-              VALUES (${type}, ${asset}, ${pair}, ${safeAmount}, ${safePrice}, ${safeExchangeRate}, ${totalProfit})
-              RETURNING id
-            `;
+            const client = await getDbClient();
+            const { rows } = await client.query(
+              'INSERT INTO transactions (type, asset, pair, amount, price, exchange_rate, realized_profit) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id',
+              [type, asset, pair, safeAmount, safePrice, safeExchangeRate, totalProfit]
+            );
+            await client.end();
             console.log("SELL transaction saved to Postgres, ID:", rows[0].id);
             return res.json({ id: rows[0].id });
           } else {
@@ -348,11 +379,12 @@ app.get("/api/prices", async (req, res) => {
   
         if (type === 'EXCHANGE') {
           if (usePostgres) {
-            const { rows } = await sql`
-              INSERT INTO transactions (type, from_asset, to_asset, from_amount, to_amount, asset_exchange_rate) 
-              VALUES (${type}, ${fromAsset}, ${toAsset}, ${safeFromAmount}, ${safeToAmount}, ${safeAssetExchangeRate})
-              RETURNING id
-            `;
+            const client = await getDbClient();
+            const { rows } = await client.query(
+              'INSERT INTO transactions (type, from_asset, to_asset, from_amount, to_amount, asset_exchange_rate) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id',
+              [type, fromAsset, toAsset, safeFromAmount, safeToAmount, safeAssetExchangeRate]
+            );
+            await client.end();
             console.log("EXCHANGE transaction saved to Postgres, ID:", rows[0].id);
             return res.json({ id: rows[0].id });
           } else {
@@ -370,7 +402,9 @@ app.get("/api/prices", async (req, res) => {
   app.delete("/api/transactions/:id", async (req, res) => {
     try {
       if (usePostgres) {
-        await sql`DELETE FROM transactions WHERE id = ${req.params.id}`;
+        const client = await getDbClient();
+        await client.query('DELETE FROM transactions WHERE id = $1', [req.params.id]);
+        await client.end();
       }
       res.json({ success: true });
     } catch (err) {
@@ -384,14 +418,17 @@ app.get("/api/prices", async (req, res) => {
 
     try {
       if (usePostgres) {
-        await sql`
-          UPDATE transactions 
-          SET type = ${type}, asset = ${asset}, pair = ${pair}, amount = ${amount}, price = ${price}, 
-              exchange_rate = ${exchangeRate}, remaining_amount = ${remainingAmount}, 
-              realized_profit = ${realizedProfit}, from_asset = ${fromAsset}, to_asset = ${toAsset},
-              from_amount = ${fromAmount}, to_amount = ${toAmount}, asset_exchange_rate = ${assetExchangeRate}
-          WHERE id = ${id}
-        `;
+        const client = await getDbClient();
+        await client.query(
+          `UPDATE transactions 
+           SET type = $1, asset = $2, pair = $3, amount = $4, price = $5, 
+               exchange_rate = $6, remaining_amount = $7, 
+               realized_profit = $8, from_asset = $9, to_asset = $10,
+               from_amount = $11, to_amount = $12, asset_exchange_rate = $13
+           WHERE id = $14`,
+          [type, asset, pair, amount, price, exchangeRate, remainingAmount, realizedProfit, fromAsset, toAsset, fromAmount, toAmount, assetExchangeRate, id]
+        );
+        await client.end();
       }
       res.json({ success: true });
     } catch (err) {
