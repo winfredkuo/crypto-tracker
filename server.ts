@@ -205,12 +205,11 @@ app.get("/api/prices", async (req, res) => {
     try {
       if (usePostgres) {
         await sql`DROP TABLE IF EXISTS transactions`;
+        dbInitialized = false; // Trigger re-init on next request
+        res.json({ success: true, message: "Database reset successfully" });
       } else {
-        const db = await getSqliteDb();
-        if (db) db.exec("DROP TABLE IF EXISTS transactions");
+        res.status(400).json({ error: "Postgres not configured" });
       }
-      dbInitialized = false; // Trigger re-init on next request
-      res.json({ success: true, message: "Database reset successfully" });
     } catch (err) {
       console.error("Reset DB error:", err);
       res.status(500).json({ error: (err as Error).message });
@@ -219,13 +218,10 @@ app.get("/api/prices", async (req, res) => {
 
   app.get("/api/transactions", async (req, res) => {
     try {
-      let transactions;
+      let transactions = [];
       if (usePostgres) {
         const { rows } = await sql`SELECT * FROM transactions ORDER BY timestamp DESC`;
         transactions = rows;
-      } else {
-        const db = await getSqliteDb();
-        transactions = db ? db.prepare("SELECT * FROM transactions ORDER BY timestamp DESC").all() : [];
       }
 
       const mapped = transactions.map((t: any) => ({
@@ -275,12 +271,7 @@ app.get("/api/prices", async (req, res) => {
             console.log("BUY transaction saved to Postgres, ID:", rows[0].id);
             return res.json({ id: rows[0].id });
           } else {
-            const db = await getSqliteDb();
-            if (!db) throw new Error("Database not available");
-            const info = db.prepare(
-              "INSERT INTO transactions (type, asset, pair, amount, price, exchange_rate, remaining_amount) VALUES (?, ?, ?, ?, ?, ?, ?)"
-            ).run(type, asset, pair, safeAmount, safePrice, safeExchangeRate, safeAmount);
-            return res.json({ id: info.lastInsertRowid });
+            return res.status(400).json({ error: "Database not available" });
           }
         }
   
@@ -295,9 +286,6 @@ app.get("/api/prices", async (req, res) => {
               if (usePostgres) {
                 const { rows } = await sql`SELECT * FROM transactions WHERE id = ${lotSelection.id}`;
                 buy = rows[0];
-              } else {
-                const db = await getSqliteDb();
-                buy = db ? db.prepare("SELECT * FROM transactions WHERE id = ?").get(lotSelection.id) : null;
               }
   
               if (!buy || buy.remaining_amount < lotSelection.amount) continue;
@@ -312,25 +300,16 @@ app.get("/api/prices", async (req, res) => {
                       realized_profit = realized_profit + ${profitFromThisLot} 
                   WHERE id = ${buy.id}
                 `;
-              } else {
-                const db = await getSqliteDb();
-                if (db) {
-                  db.prepare("UPDATE transactions SET remaining_amount = remaining_amount - ?, realized_profit = realized_profit + ? WHERE id = ?")
-                    .run(lotSelection.amount, profitFromThisLot, buy.id);
-                }
               }
               
               totalProfit += profitFromThisLot;
             }
           } else {
             // FIFO Fallback
-            let buys;
+            let buys = [];
             if (usePostgres) {
               const { rows } = await sql`SELECT * FROM transactions WHERE type = 'BUY' AND asset = ${asset} AND remaining_amount > 0 ORDER BY timestamp ASC`;
               buys = rows;
-            } else {
-              const db = await getSqliteDb();
-              buys = db ? db.prepare("SELECT * FROM transactions WHERE type = 'BUY' AND asset = ? AND remaining_amount > 0 ORDER BY timestamp ASC").all(asset) : [];
             }
   
             let sellAmount = safeAmount;
@@ -347,12 +326,6 @@ app.get("/api/prices", async (req, res) => {
                       realized_profit = realized_profit + ${profitFromThisLot} 
                   WHERE id = ${buy.id}
                 `;
-              } else {
-                const db = await getSqliteDb();
-                if (db) {
-                  db.prepare("UPDATE transactions SET remaining_amount = remaining_amount - ?, realized_profit = realized_profit + ? WHERE id = ?")
-                    .run(consume, profitFromThisLot, buy.id);
-                }
               }
               
               totalProfit += profitFromThisLot;
@@ -369,12 +342,7 @@ app.get("/api/prices", async (req, res) => {
             console.log("SELL transaction saved to Postgres, ID:", rows[0].id);
             return res.json({ id: rows[0].id });
           } else {
-            const db = await getSqliteDb();
-            if (!db) throw new Error("Database not available");
-            const info = db.prepare(
-              "INSERT INTO transactions (type, asset, pair, amount, price, exchange_rate, realized_profit) VALUES (?, ?, ?, ?, ?, ?, ?)"
-            ).run(type, asset, pair, safeAmount, safePrice, safeExchangeRate, totalProfit);
-            return res.json({ id: info.lastInsertRowid });
+            return res.status(400).json({ error: "Database not available" });
           }
         }
   
@@ -388,12 +356,7 @@ app.get("/api/prices", async (req, res) => {
             console.log("EXCHANGE transaction saved to Postgres, ID:", rows[0].id);
             return res.json({ id: rows[0].id });
           } else {
-            const db = await getSqliteDb();
-            if (!db) throw new Error("Database not available");
-            const info = db.prepare(
-              "INSERT INTO transactions (type, from_asset, to_asset, from_amount, to_amount, asset_exchange_rate) VALUES (?, ?, ?, ?, ?, ?)"
-            ).run(type, fromAsset, toAsset, safeFromAmount, safeToAmount, safeAssetExchangeRate);
-            return res.json({ id: info.lastInsertRowid });
+            return res.status(400).json({ error: "Database not available" });
           }
         }
 
@@ -408,9 +371,6 @@ app.get("/api/prices", async (req, res) => {
     try {
       if (usePostgres) {
         await sql`DELETE FROM transactions WHERE id = ${req.params.id}`;
-      } else {
-        const db = await getSqliteDb();
-        if (db) db.prepare("DELETE FROM transactions WHERE id = ?").run(req.params.id);
       }
       res.json({ success: true });
     } catch (err) {
@@ -432,17 +392,6 @@ app.get("/api/prices", async (req, res) => {
               from_amount = ${fromAmount}, to_amount = ${toAmount}, asset_exchange_rate = ${assetExchangeRate}
           WHERE id = ${id}
         `;
-      } else {
-        const db = await getSqliteDb();
-        if (db) {
-          db.prepare(`
-            UPDATE transactions 
-            SET type = ?, asset = ?, pair = ?, amount = ?, price = ?, exchange_rate = ?, 
-                remaining_amount = ?, realized_profit = ?, from_asset = ?, to_asset = ?,
-                from_amount = ?, to_amount = ?, asset_exchange_rate = ?
-            WHERE id = ?
-          `).run(type, asset, pair, amount, price, exchangeRate, remainingAmount, realizedProfit, fromAsset, toAsset, fromAmount, toAmount, assetExchangeRate, id);
-        }
       }
       res.json({ success: true });
     } catch (err) {
