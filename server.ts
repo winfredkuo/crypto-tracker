@@ -1,9 +1,10 @@
 import "dotenv/config";
 import express from "express";
 import path from "path";
-import pg from "pg";
+import { createRequire } from "module";
 
-const { Client } = pg;
+const require = createRequire(import.meta.url);
+const { Client } = require("pg");
 
 // Helper to check if we should use Postgres
 const usePostgres = !!process.env.POSTGRES_URL || !!process.env.DATABASE_URL || !!process.env.POSTGRES_URL_NON_POOLING;
