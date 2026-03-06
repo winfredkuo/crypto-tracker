@@ -7,7 +7,16 @@ import { createClient } from "@vercel/postgres";
 const usePostgres = !!process.env.POSTGRES_URL || !!process.env.DATABASE_URL || !!process.env.POSTGRES_URL_NON_POOLING;
 
 const getDbClient = async () => {
-  const client = createClient();
+  let connectionString = process.env.POSTGRES_URL_NON_POOLING || process.env.POSTGRES_URL || process.env.DATABASE_URL;
+  
+  if (connectionString && connectionString.startsWith("postgres://")) {
+    connectionString = connectionString.replace("postgres://", "postgresql://");
+  }
+
+  const client = createClient({
+    connectionString: connectionString
+  });
+  
   await client.connect();
   return client;
 };
@@ -69,15 +78,19 @@ async function initDatabase() {
 const app = express();
 app.use(express.json());
 
-// Ensure DB is initialized
+// Ensure DB is initialized only for routes that need it
 let dbInitialized = false;
-app.use(async (req, res, next) => {
-  if (!dbInitialized) {
-    await initDatabase();
-    dbInitialized = true;
+const ensureDb = async (req: any, res: any, next: any) => {
+  if (!dbInitialized && usePostgres) {
+    try {
+      await initDatabase();
+      dbInitialized = true;
+    } catch (err) {
+      console.error("DB Init failed in middleware:", err);
+    }
   }
   next();
-});
+};
 
 // Price cache to handle quota issues
 let priceCache: { data: any, timestamp: number } | null = null;
@@ -102,85 +115,48 @@ app.get("/api/debug/env", (req, res) => {
 });
 
 app.get("/api/prices", async (req, res) => {
-    // Return cached data if valid
+    // Return cached data if valid (15s cache)
     if (priceCache && Date.now() - priceCache.timestamp < CACHE_DURATION) {
       return res.json(priceCache.data);
     }
 
+    // Use a very short timeout for the live fetch to keep the UI responsive
+    const fetchTimeout = 2500;
+
     try {
-      // Strategy: 1. CoinGlass (if key exists) -> 2. Binance -> 3. CoinGecko
+      // Helper to fetch from Binance (usually fastest)
+      const fetchBinance = async () => {
+        const symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT"];
+        const url = `https://api.binance.com/api/v3/ticker/24hr?symbols=${encodeURIComponent(JSON.stringify(symbols))}`;
+        const response = await fetch(url, { signal: AbortSignal.timeout(fetchTimeout) });
+        if (!response.ok) throw new Error("Binance failed");
+        const data = await response.json();
+        if (!Array.isArray(data)) throw new Error("Invalid Binance data");
+        return data;
+      };
+
+      // Helper to fetch from CoinGecko
+      const fetchCoinGecko = async () => {
+        const response = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana&vs_currencies=usd&include_24hr_change=true", { signal: AbortSignal.timeout(fetchTimeout) });
+        if (!response.ok) throw new Error("CoinGecko failed");
+        const data = await response.json();
+        return [
+          { symbol: "BTCUSDT", lastPrice: String(data.bitcoin.usd), priceChangePercent: String(data.bitcoin.usd_24h_change) },
+          { symbol: "ETHUSDT", lastPrice: String(data.ethereum.usd), priceChangePercent: String(data.ethereum.usd_24h_change) },
+          { symbol: "SOLUSDT", lastPrice: String(data.solana.usd), priceChangePercent: String(data.solana.usd_24h_change) }
+        ];
+      };
+
+      // Try Binance first, then fallback to CoinGecko
       let priceData = null;
-      
-      // 1. Try CoinGlass
-      const cgSecret = getEnv("COINGLASS_SECRET") || process.env.Coinglass_secret;
-      if (cgSecret) {
+      try {
+        priceData = await fetchBinance();
+      } catch (e) {
+        console.warn("Binance failed, trying CoinGecko...");
         try {
-          const response = await fetch("https://open-api.coinglass.com/public/v2/index/price", {
-            headers: { "coinglassSecret": cgSecret },
-            signal: AbortSignal.timeout(5000)
-          });
-          
-          if (response.ok) {
-            const json = await response.json();
-            if (json.success && json.data) {
-              const data = json.data;
-              const symbolsMap: Record<string, string> = { "BTC": "BTCUSDT", "ETH": "ETHUSDT", "SOL": "SOLUSDT" };
-              const relevantData = data.filter((item: any) => symbolsMap[item.symbol]);
-              
-              if (relevantData.length > 0) {
-                priceData = relevantData.map((item: any) => ({
-                  symbol: symbolsMap[item.symbol],
-                  lastPrice: String(item.price),
-                  priceChangePercent: String(item.changePercent24h || 0)
-                }));
-              }
-            }
-          }
-        } catch (e) {
-          console.warn("CoinGlass failed, trying Binance...", e);
-        }
-      }
-
-      // 2. Try Binance
-      if (!priceData) {
-        try {
-          const symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT"];
-          const url = `https://api.binance.com/api/v3/ticker/24hr?symbols=${encodeURIComponent(JSON.stringify(symbols))}`;
-          const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
-          if (response.ok) {
-            const data = await response.json();
-            if (Array.isArray(data)) priceData = data;
-          }
-        } catch (e) {
-          console.warn("Binance.com failed, trying Binance.us...", e);
-          try {
-            const symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT"];
-            const url = `https://api.binance.us/api/v3/ticker/24hr?symbols=${encodeURIComponent(JSON.stringify(symbols))}`;
-            const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
-            if (response.ok) {
-              const data = await response.json();
-              if (Array.isArray(data)) priceData = data;
-            }
-          } catch (e2) {
-            console.warn("Binance.us failed, trying CoinGecko...", e2);
-          }
-        }
-      }
-
-      // 3. Try CoinGecko
-      if (!priceData) {
-        try {
-          const response = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana&vs_currencies=usd&include_24hr_change=true", { signal: AbortSignal.timeout(5000) });
-          if (response.ok) {
-            const data = await response.json();
-            priceData = [
-              { symbol: "BTCUSDT", lastPrice: String(data.bitcoin.usd), priceChangePercent: String(data.bitcoin.usd_24h_change) },
-              { symbol: "ETHUSDT", lastPrice: String(data.ethereum.usd), priceChangePercent: String(data.ethereum.usd_24h_change) },
-              { symbol: "SOLUSDT", lastPrice: String(data.solana.usd), priceChangePercent: String(data.solana.usd_24h_change) }
-            ];
-          }
-        } catch (e) {
-          console.warn("CoinGecko failed final fallback", e);
+          priceData = await fetchCoinGecko();
+        } catch (e2) {
+          console.warn("CoinGecko failed too");
         }
       }
 
@@ -189,15 +165,16 @@ app.get("/api/prices", async (req, res) => {
         return res.json(priceData);
       }
 
-      // If all fail, return cache even if expired
+      // If all live fetches fail, return cache even if expired
       if (priceCache) {
         console.warn("All APIs failed, returning stale cache");
         return res.json(priceCache.data);
       }
 
-      throw new Error("All price APIs failed and no cache available");
+      res.status(503).json({ error: "Price service temporarily unavailable" });
     } catch (error) {
       console.error("Price fetch error:", error);
+      if (priceCache) return res.json(priceCache.data);
       res.status(500).json({ error: "Failed to fetch prices" });
     }
   });
@@ -214,7 +191,7 @@ app.get("/api/prices", async (req, res) => {
     }
   });
 
-  app.post("/api/admin/reset-db", async (req, res) => {
+  app.post("/api/admin/reset-db", ensureDb, async (req, res) => {
     try {
       if (usePostgres) {
         const client = await getDbClient();
@@ -231,7 +208,7 @@ app.get("/api/prices", async (req, res) => {
     }
   });
 
-  app.get("/api/transactions", async (req, res) => {
+  app.get("/api/transactions", ensureDb, async (req, res) => {
     try {
       let transactions = [];
       if (usePostgres) {
@@ -264,7 +241,7 @@ app.get("/api/prices", async (req, res) => {
     }
   });
 
-  app.post("/api/transactions", async (req, res) => {
+  app.post("/api/transactions", ensureDb, async (req, res) => {
     const { type, asset, pair, amount, price, exchangeRate, fromAsset, toAsset, fromAmount, toAmount, assetExchangeRate } = req.body;
     
     console.log(`Incoming transaction: ${type}`, req.body);
@@ -391,7 +368,7 @@ app.get("/api/prices", async (req, res) => {
     }
   });
 
-  app.delete("/api/transactions/:id", async (req, res) => {
+  app.delete("/api/transactions/:id", ensureDb, async (req, res) => {
     try {
       if (usePostgres) {
         const client = await getDbClient();
@@ -404,7 +381,7 @@ app.get("/api/prices", async (req, res) => {
     }
   });
 
-  app.put("/api/transactions/:id", async (req, res) => {
+  app.put("/api/transactions/:id", ensureDb, async (req, res) => {
     const { type, asset, pair, amount, price, exchangeRate, remainingAmount, realizedProfit, fromAsset, toAsset, fromAmount, toAmount, assetExchangeRate } = req.body;
     const id = req.params.id;
 
