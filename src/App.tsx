@@ -5,6 +5,7 @@ import Dashboard from './components/Dashboard';
 import ExchangeHistory from './components/ExchangeHistory';
 import TransactionForm from './components/TransactionForm';
 import SidebarSummary from './components/SidebarSummary';
+import MarketInsights from './components/MarketInsights';
 import Modal from './components/Modal';
 import { RefreshCw, LayoutDashboard, Plus, PlusCircle, ArrowRightLeft } from 'lucide-react';
 
@@ -176,6 +177,11 @@ export default function App() {
               </button>
             </div>
 
+            <MarketInsights 
+              prices={prices}
+              transactions={transactions}
+            />
+
             <button 
               onClick={openAddModal}
               className="w-full py-3 bg-emerald-500 hover:bg-emerald-600 text-white font-bold rounded-xl shadow-lg shadow-emerald-500/20 transition-all flex items-center justify-center gap-2 group"
@@ -196,6 +202,7 @@ export default function App() {
             {currentView === 'DASHBOARD' ? (
               <Dashboard 
                 transactions={transactions} 
+                prices={prices}
                 onDelete={handleDeleteTransaction}
                 onEdit={(tx) => {
                   setTemplateTransaction(null);

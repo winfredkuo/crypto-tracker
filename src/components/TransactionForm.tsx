@@ -118,7 +118,7 @@ export default function TransactionForm({ onAdd, onUpdate, currentExchangeRate, 
   const availableLots = transactions.filter(tx => 
     tx.type === 'BUY' && 
     (tx.remainingAmount || 0) > 0 && 
-    tx.asset === (type === 'SWAP' ? fromAsset : asset)
+    tx.asset === (type === 'EXCHANGE' ? fromAsset : asset)
   ).sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
   const toggleLot = (lotId: number, maxAmount: number) => {
@@ -236,7 +236,7 @@ export default function TransactionForm({ onAdd, onUpdate, currentExchangeRate, 
         </div>
       </div>
 
-      {(type === 'SELL' || type === 'SWAP') && (
+      {(type === 'SELL' || type === 'EXCHANGE') && (
         <div className="flex items-center gap-2 mb-2">
           <button
             type="button"
@@ -249,7 +249,7 @@ export default function TransactionForm({ onAdd, onUpdate, currentExchangeRate, 
         </div>
       )}
 
-      {isManualSelection && (type === 'SELL' || type === 'SWAP') && (
+      {isManualSelection && (type === 'SELL' || type === 'EXCHANGE') && (
         <div className="space-y-2 max-h-48 overflow-y-auto p-3 bg-gray-50 rounded-xl border border-gray-100">
           <p className="text-[10px] font-bold text-gray-400 uppercase mb-2">可選批次 (FIFO 排序)</p>
           {availableLots.map(lot => (

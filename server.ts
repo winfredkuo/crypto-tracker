@@ -1,85 +1,185 @@
+import "dotenv/config";
 import express from "express";
 import { createServer as createViteServer } from "vite";
-import Database from "better-sqlite3";
 import path from "path";
+import { sql } from "@vercel/postgres";
 
-const db = new Database("crypto_tracker.db");
+// Helper to check if we should use Postgres
+const usePostgres = !!process.env.POSTGRES_URL;
 
-// Initialize database
-db.exec(`
-  CREATE TABLE IF NOT EXISTS transactions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    type TEXT CHECK(type IN ('BUY', 'SELL', 'EXCHANGE')),
-    asset TEXT,
-    pair TEXT CHECK(pair IN ('TWD', 'USDT')),
-    amount REAL,
-    price REAL,
-    exchange_rate REAL,
-    remaining_amount REAL,
-    realized_profit REAL DEFAULT 0,
-    from_asset TEXT,
-    to_asset TEXT,
-    from_amount REAL,
-    to_amount REAL,
-    asset_exchange_rate REAL,
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-  )
-`);
+// Initialize SQLite lazily to avoid issues in environments where it's not supported
+let sqliteDb: any = null;
 
-// Migration: Add missing columns if they don't exist
-const tableInfo = db.prepare("PRAGMA table_info(transactions)").all();
-const columns = tableInfo.map((c: any) => c.name);
-
-if (!columns.includes('exchange_rate')) {
-  db.exec("ALTER TABLE transactions ADD COLUMN exchange_rate REAL DEFAULT 31.5");
-}
-if (!columns.includes('remaining_amount')) {
-  db.exec("ALTER TABLE transactions ADD COLUMN remaining_amount REAL");
-  // Populate remaining_amount for existing BUY transactions
-  db.exec("UPDATE transactions SET remaining_amount = amount WHERE type = 'BUY' AND remaining_amount IS NULL");
-}
-if (!columns.includes('realized_profit')) {
-  db.exec("ALTER TABLE transactions ADD COLUMN realized_profit REAL DEFAULT 0");
-}
-if (!columns.includes('from_asset')) {
-  db.exec("ALTER TABLE transactions ADD COLUMN from_asset TEXT");
-}
-if (!columns.includes('to_asset')) {
-  db.exec("ALTER TABLE transactions ADD COLUMN to_asset TEXT");
-}
-if (!columns.includes('from_amount')) {
-  db.exec("ALTER TABLE transactions ADD COLUMN from_amount REAL");
-}
-if (!columns.includes('to_amount')) {
-  db.exec("ALTER TABLE transactions ADD COLUMN to_amount REAL");
-}
-if (!columns.includes('asset_exchange_rate')) {
-  db.exec("ALTER TABLE transactions ADD COLUMN asset_exchange_rate REAL");
-}
-
-// Update type check if needed (SQLite doesn't easily allow updating CHECK constraints, but we can try to recreate or just ignore if it's already there)
-// For simplicity in this environment, we'll just assume the new table creation or migration handled it.
-
-// Ensure remaining_amount is not null for any existing BUY transactions (double check)
-db.exec("UPDATE transactions SET remaining_amount = amount WHERE type = 'BUY' AND remaining_amount IS NULL");
-db.exec("UPDATE transactions SET exchange_rate = 31.5 WHERE exchange_rate IS NULL");
-
-
-async function startServer() {
-  const app = express();
-  const PORT = 3000;
-
-  app.use(express.json());
-
-  // API Routes
-  app.get("/api/prices", async (req, res) => {
+async function getSqliteDb() {
+  if (!sqliteDb && !usePostgres) {
     try {
-      const symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT"];
-      const url = `https://api.binance.com/api/v3/ticker/24hr?symbols=${encodeURIComponent(JSON.stringify(symbols))}`;
-      const response = await fetch(url);
-      if (!response.ok) throw new Error("Binance API error");
-      const data = await response.json();
-      res.json(data);
+      const { default: Database } = await import("better-sqlite3");
+      sqliteDb = new Database("crypto_tracker.db");
+    } catch (err) {
+      console.warn("Failed to load better-sqlite3, local database will not be available.");
+    }
+  }
+  return sqliteDb;
+}
+
+async function initDatabase() {
+  if (usePostgres) {
+    console.log("Using Vercel Postgres");
+    try {
+      // Create table in Postgres
+      await sql`
+        CREATE TABLE IF NOT EXISTS transactions (
+          id SERIAL PRIMARY KEY,
+          type TEXT CHECK(type IN ('BUY', 'SELL', 'EXCHANGE')),
+          asset TEXT,
+          pair TEXT CHECK(pair IN ('TWD', 'USDT')),
+          amount DOUBLE PRECISION,
+          price DOUBLE PRECISION,
+          exchange_rate DOUBLE PRECISION,
+          remaining_amount DOUBLE PRECISION,
+          realized_profit DOUBLE PRECISION DEFAULT 0,
+          from_asset TEXT,
+          to_asset TEXT,
+          from_amount DOUBLE PRECISION,
+          to_amount DOUBLE PRECISION,
+          asset_exchange_rate DOUBLE PRECISION,
+          timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `;
+      console.log("Postgres table ensured");
+    } catch (err) {
+      console.error("Postgres init error:", err);
+    }
+  } else {
+    const db = await getSqliteDb();
+    if (db) {
+      console.log("Using local SQLite");
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS transactions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          type TEXT CHECK(type IN ('BUY', 'SELL', 'EXCHANGE')),
+          asset TEXT,
+          pair TEXT CHECK(pair IN ('TWD', 'USDT')),
+          amount REAL,
+          price REAL,
+          exchange_rate REAL,
+          remaining_amount REAL,
+          realized_profit REAL DEFAULT 0,
+          from_asset TEXT,
+          to_asset TEXT,
+          from_amount REAL,
+          to_amount REAL,
+          asset_exchange_rate REAL,
+          timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+    }
+  }
+}
+
+const app = express();
+app.use(express.json());
+
+// Ensure DB is initialized
+let dbInitialized = false;
+app.use(async (req, res, next) => {
+  if (!dbInitialized) {
+    await initDatabase();
+    dbInitialized = true;
+  }
+  next();
+});
+
+// API Routes
+app.get("/api/prices", async (req, res) => {
+    try {
+      // Strategy: 1. CoinGlass (if key exists) -> 2. Binance -> 3. CoinGecko
+      
+      // 1. Try CoinGlass (Primary - if API key is configured)
+      if (process.env.COINGLASS_SECRET) {
+        try {
+          const response = await fetch("https://open-api.coinglass.com/public/v2/index/price", {
+            headers: { "coinglassSecret": process.env.COINGLASS_SECRET },
+            signal: AbortSignal.timeout(5000)
+          });
+          
+          if (response.ok) {
+            const json = await response.json();
+            if (json.success && json.data) {
+              const data = json.data;
+              const symbolsMap: Record<string, string> = { "BTC": "BTCUSDT", "ETH": "ETHUSDT", "SOL": "SOLUSDT" };
+              const relevantData = data.filter((item: any) => symbolsMap[item.symbol]);
+              
+              if (relevantData.length > 0) {
+                const mappedData = relevantData.map((item: any) => ({
+                  symbol: symbolsMap[item.symbol],
+                  lastPrice: String(item.price),
+                  priceChangePercent: String(item.changePercent24h || 0)
+                }));
+                return res.json(mappedData);
+              }
+            }
+          }
+        } catch (e) {
+          console.warn("CoinGlass failed, trying Binance...", e);
+        }
+      }
+
+      // 2. Try Binance (Secondary)
+      try {
+        const symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT"];
+        const url = `https://api.binance.com/api/v3/ticker/24hr?symbols=${encodeURIComponent(JSON.stringify(symbols))}`;
+        const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
+        if (response.ok) {
+          const data = await response.json();
+          if (Array.isArray(data)) {
+            return res.json(data);
+          }
+        }
+      } catch (e) {
+        console.warn("Binance.com failed, trying Binance.us...", e);
+        try {
+          const symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT"];
+          const url = `https://api.binance.us/api/v3/ticker/24hr?symbols=${encodeURIComponent(JSON.stringify(symbols))}`;
+          const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
+          if (response.ok) {
+            const data = await response.json();
+            if (Array.isArray(data)) return res.json(data);
+          }
+        } catch (e2) {
+          console.warn("Binance.us failed, trying CoinGecko...", e2);
+        }
+      }
+
+      // 3. Try CoinGecko (Tertiary)
+      try {
+        const response = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana&vs_currencies=usd&include_24hr_change=true", { signal: AbortSignal.timeout(5000) });
+        if (response.ok) {
+          const data = await response.json();
+          const mappedData = [
+            { 
+              symbol: "BTCUSDT", 
+              lastPrice: String(data.bitcoin.usd), 
+              priceChangePercent: String(data.bitcoin.usd_24h_change) 
+            },
+            { 
+              symbol: "ETHUSDT", 
+              lastPrice: String(data.ethereum.usd), 
+              priceChangePercent: String(data.ethereum.usd_24h_change) 
+            },
+            { 
+              symbol: "SOLUSDT", 
+              lastPrice: String(data.solana.usd), 
+              priceChangePercent: String(data.solana.usd_24h_change) 
+            }
+          ];
+          return res.json(mappedData);
+        }
+      } catch (e) {
+        console.warn("CoinGecko failed final fallback", e);
+      }
+
+      throw new Error("All price APIs failed");
     } catch (error) {
       console.error("Price fetch error:", error);
       res.status(500).json({ error: "Failed to fetch prices" });
@@ -98,114 +198,227 @@ async function startServer() {
     }
   });
 
-  app.get("/api/transactions", (req, res) => {
-    const transactions = db.prepare("SELECT * FROM transactions ORDER BY timestamp DESC").all();
-    // Map snake_case to camelCase
-    const mapped = transactions.map((t: any) => ({
-      id: t.id,
-      type: t.type,
-      asset: t.asset,
-      pair: t.pair,
-      amount: t.amount,
-      price: t.price,
-      exchangeRate: t.exchange_rate,
-      remainingAmount: t.remaining_amount,
-      realizedProfit: t.realized_profit,
-      fromAsset: t.from_asset,
-      toAsset: t.to_asset,
-      fromAmount: t.from_amount,
-      toAmount: t.to_amount,
-      assetExchangeRate: t.asset_exchange_rate,
-      timestamp: t.timestamp
-    }));
-    res.json(mapped);
-  });
-
-  app.post("/api/transactions", (req, res) => {
-    const { type, asset, pair, amount, price, exchangeRate, fromAsset, toAsset, fromAmount, toAmount, assetExchangeRate } = req.body;
-    
-    if (type === 'BUY') {
-      const info = db.prepare(
-        "INSERT INTO transactions (type, asset, pair, amount, price, exchange_rate, remaining_amount) VALUES (?, ?, ?, ?, ?, ?, ?)"
-      ).run(type, asset, pair, amount, price, exchangeRate, amount);
-      return res.json({ id: info.lastInsertRowid });
-    }
-
-    if (type === 'SELL') {
-      const { selectedLots } = req.body;
-      let totalProfit = 0;
-      const sellPriceInUSDT = pair === 'USDT' ? price : price / exchangeRate;
-
-      if (selectedLots && Array.isArray(selectedLots) && selectedLots.length > 0) {
-        // Manual lot selection
-        for (const lotSelection of selectedLots) {
-          const buy = db.prepare("SELECT * FROM transactions WHERE id = ?").get(lotSelection.id);
-          if (!buy || buy.remaining_amount < lotSelection.amount) continue;
-
-          const buyPriceInUSDT = buy.pair === 'USDT' ? buy.price : buy.price / buy.exchange_rate;
-          const profitFromThisLot = lotSelection.amount * (sellPriceInUSDT - buyPriceInUSDT);
-          
-          db.prepare("UPDATE transactions SET remaining_amount = remaining_amount - ?, realized_profit = realized_profit + ? WHERE id = ?")
-            .run(lotSelection.amount, profitFromThisLot, buy.id);
-          
-          totalProfit += profitFromThisLot;
-        }
+  app.get("/api/transactions", async (req, res) => {
+    try {
+      let transactions;
+      if (usePostgres) {
+        const { rows } = await sql`SELECT * FROM transactions ORDER BY timestamp DESC`;
+        transactions = rows;
       } else {
-        // Fallback to FIFO logic
-        const buys = db.prepare("SELECT * FROM transactions WHERE type = 'BUY' AND asset = ? AND remaining_amount > 0 ORDER BY timestamp ASC").all(asset);
-        let sellAmount = amount;
-        for (const buy of buys) {
-          if (sellAmount <= 0) break;
-          const buyPriceInUSDT = buy.pair === 'USDT' ? buy.price : buy.price / buy.exchange_rate;
-          const consume = Math.min(sellAmount, buy.remaining_amount);
-          const profitFromThisLot = consume * (sellPriceInUSDT - buyPriceInUSDT);
-          
-          db.prepare("UPDATE transactions SET remaining_amount = remaining_amount - ?, realized_profit = realized_profit + ? WHERE id = ?")
-            .run(consume, profitFromThisLot, buy.id);
-          
-          totalProfit += profitFromThisLot;
-          sellAmount -= consume;
-        }
+        const db = await getSqliteDb();
+        transactions = db ? db.prepare("SELECT * FROM transactions ORDER BY timestamp DESC").all() : [];
       }
 
-      const info = db.prepare(
-        "INSERT INTO transactions (type, asset, pair, amount, price, exchange_rate, realized_profit) VALUES (?, ?, ?, ?, ?, ?, ?)"
-      ).run(type, asset, pair, amount, price, exchangeRate, totalProfit);
-      return res.json({ id: info.lastInsertRowid });
+      const mapped = transactions.map((t: any) => ({
+        id: t.id,
+        type: t.type,
+        asset: t.asset,
+        pair: t.pair,
+        amount: t.amount,
+        price: t.price,
+        exchangeRate: t.exchange_rate,
+        remainingAmount: t.remaining_amount,
+        realizedProfit: t.realized_profit,
+        fromAsset: t.from_asset,
+        toAsset: t.to_asset,
+        fromAmount: t.from_amount,
+        toAmount: t.to_amount,
+        assetExchangeRate: t.asset_exchange_rate,
+        timestamp: t.timestamp
+      }));
+      res.json(mapped);
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
     }
-
-    if (type === 'EXCHANGE') {
-      const info = db.prepare(
-        "INSERT INTO transactions (type, from_asset, to_asset, from_amount, to_amount, asset_exchange_rate) VALUES (?, ?, ?, ?, ?, ?)"
-      ).run(type, fromAsset, toAsset, fromAmount, toAmount, assetExchangeRate);
-      return res.json({ id: info.lastInsertRowid });
-    }
-
-    res.status(400).json({ error: "Invalid transaction type" });
   });
 
-  app.delete("/api/transactions/:id", (req, res) => {
-    // Note: Deleting a transaction in a FIFO system is tricky.
-    // For a simple app, we'll just delete it, but it might mess up calculations.
-    // In a real app, you'd want to recalculate everything.
-    db.prepare("DELETE FROM transactions WHERE id = ?").run(req.params.id);
-    res.json({ success: true });
+  app.post("/api/transactions", async (req, res) => {
+    const { type, asset, pair, amount, price, exchangeRate, fromAsset, toAsset, fromAmount, toAmount, assetExchangeRate } = req.body;
+    
+    try {
+      if (type === 'BUY') {
+          if (usePostgres) {
+            const { rows } = await sql`
+              INSERT INTO transactions (type, asset, pair, amount, price, exchange_rate, remaining_amount) 
+              VALUES (${type}, ${asset}, ${pair}, ${amount}, ${price}, ${exchangeRate}, ${amount})
+              RETURNING id
+            `;
+            return res.json({ id: rows[0].id });
+          } else {
+            const db = await getSqliteDb();
+            if (!db) throw new Error("Database not available");
+            const info = db.prepare(
+              "INSERT INTO transactions (type, asset, pair, amount, price, exchange_rate, remaining_amount) VALUES (?, ?, ?, ?, ?, ?, ?)"
+            ).run(type, asset, pair, amount, price, exchangeRate, amount);
+            return res.json({ id: info.lastInsertRowid });
+          }
+        }
+  
+        if (type === 'SELL') {
+          const { selectedLots } = req.body;
+          let totalProfit = 0;
+          const sellPriceInUSDT = pair === 'USDT' ? price : price / exchangeRate;
+  
+          if (selectedLots && Array.isArray(selectedLots) && selectedLots.length > 0) {
+            for (const lotSelection of selectedLots) {
+              let buy;
+              if (usePostgres) {
+                const { rows } = await sql`SELECT * FROM transactions WHERE id = ${lotSelection.id}`;
+                buy = rows[0];
+              } else {
+                const db = await getSqliteDb();
+                buy = db ? db.prepare("SELECT * FROM transactions WHERE id = ?").get(lotSelection.id) : null;
+              }
+  
+              if (!buy || buy.remaining_amount < lotSelection.amount) continue;
+  
+              const buyPriceInUSDT = buy.pair === 'USDT' ? buy.price : buy.price / buy.exchange_rate;
+              const profitFromThisLot = lotSelection.amount * (sellPriceInUSDT - buyPriceInUSDT);
+              
+              if (usePostgres) {
+                await sql`
+                  UPDATE transactions 
+                  SET remaining_amount = remaining_amount - ${lotSelection.amount}, 
+                      realized_profit = realized_profit + ${profitFromThisLot} 
+                  WHERE id = ${buy.id}
+                `;
+              } else {
+                const db = await getSqliteDb();
+                if (db) {
+                  db.prepare("UPDATE transactions SET remaining_amount = remaining_amount - ?, realized_profit = realized_profit + ? WHERE id = ?")
+                    .run(lotSelection.amount, profitFromThisLot, buy.id);
+                }
+              }
+              
+              totalProfit += profitFromThisLot;
+            }
+          } else {
+            // FIFO Fallback
+            let buys;
+            if (usePostgres) {
+              const { rows } = await sql`SELECT * FROM transactions WHERE type = 'BUY' AND asset = ${asset} AND remaining_amount > 0 ORDER BY timestamp ASC`;
+              buys = rows;
+            } else {
+              const db = await getSqliteDb();
+              buys = db ? db.prepare("SELECT * FROM transactions WHERE type = 'BUY' AND asset = ? AND remaining_amount > 0 ORDER BY timestamp ASC").all(asset) : [];
+            }
+  
+            let sellAmount = amount;
+            for (const buy of buys) {
+              if (sellAmount <= 0) break;
+              const buyPriceInUSDT = buy.pair === 'USDT' ? buy.price : buy.price / buy.exchange_rate;
+              const consume = Math.min(sellAmount, buy.remaining_amount);
+              const profitFromThisLot = consume * (sellPriceInUSDT - buyPriceInUSDT);
+              
+              if (usePostgres) {
+                await sql`
+                  UPDATE transactions 
+                  SET remaining_amount = remaining_amount - ${consume}, 
+                      realized_profit = realized_profit + ${profitFromThisLot} 
+                  WHERE id = ${buy.id}
+                `;
+              } else {
+                const db = await getSqliteDb();
+                if (db) {
+                  db.prepare("UPDATE transactions SET remaining_amount = remaining_amount - ?, realized_profit = realized_profit + ? WHERE id = ?")
+                    .run(consume, profitFromThisLot, buy.id);
+                }
+              }
+              
+              totalProfit += profitFromThisLot;
+              sellAmount -= consume;
+            }
+          }
+  
+          if (usePostgres) {
+            const { rows } = await sql`
+              INSERT INTO transactions (type, asset, pair, amount, price, exchange_rate, realized_profit) 
+              VALUES (${type}, ${asset}, ${pair}, ${amount}, ${price}, ${exchangeRate}, ${totalProfit})
+              RETURNING id
+            `;
+            return res.json({ id: rows[0].id });
+          } else {
+            const db = await getSqliteDb();
+            if (!db) throw new Error("Database not available");
+            const info = db.prepare(
+              "INSERT INTO transactions (type, asset, pair, amount, price, exchange_rate, realized_profit) VALUES (?, ?, ?, ?, ?, ?, ?)"
+            ).run(type, asset, pair, amount, price, exchangeRate, totalProfit);
+            return res.json({ id: info.lastInsertRowid });
+          }
+        }
+  
+        if (type === 'EXCHANGE') {
+          if (usePostgres) {
+            const { rows } = await sql`
+              INSERT INTO transactions (type, from_asset, to_asset, from_amount, to_amount, asset_exchange_rate) 
+              VALUES (${type}, ${fromAsset}, ${toAsset}, ${fromAmount}, ${toAmount}, ${assetExchangeRate})
+              RETURNING id
+            `;
+            return res.json({ id: rows[0].id });
+          } else {
+            const db = await getSqliteDb();
+            if (!db) throw new Error("Database not available");
+            const info = db.prepare(
+              "INSERT INTO transactions (type, from_asset, to_asset, from_amount, to_amount, asset_exchange_rate) VALUES (?, ?, ?, ?, ?, ?)"
+            ).run(type, fromAsset, toAsset, fromAmount, toAmount, assetExchangeRate);
+            return res.json({ id: info.lastInsertRowid });
+          }
+        }
+
+      res.status(400).json({ error: "Invalid transaction type" });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
   });
 
-  app.put("/api/transactions/:id", (req, res) => {
+  app.delete("/api/transactions/:id", async (req, res) => {
+    try {
+      if (usePostgres) {
+        await sql`DELETE FROM transactions WHERE id = ${req.params.id}`;
+      } else {
+        const db = await getSqliteDb();
+        if (db) db.prepare("DELETE FROM transactions WHERE id = ?").run(req.params.id);
+      }
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.put("/api/transactions/:id", async (req, res) => {
     const { type, asset, pair, amount, price, exchangeRate, remainingAmount, realizedProfit, fromAsset, toAsset, fromAmount, toAmount, assetExchangeRate } = req.body;
     const id = req.params.id;
 
-    db.prepare(`
-      UPDATE transactions 
-      SET type = ?, asset = ?, pair = ?, amount = ?, price = ?, exchange_rate = ?, 
-          remaining_amount = ?, realized_profit = ?, from_asset = ?, to_asset = ?,
-          from_amount = ?, to_amount = ?, asset_exchange_rate = ?
-      WHERE id = ?
-    `).run(type, asset, pair, amount, price, exchangeRate, remainingAmount, realizedProfit, fromAsset, toAsset, fromAmount, toAmount, assetExchangeRate, id);
-
-    res.json({ success: true });
+    try {
+      if (usePostgres) {
+        await sql`
+          UPDATE transactions 
+          SET type = ${type}, asset = ${asset}, pair = ${pair}, amount = ${amount}, price = ${price}, 
+              exchange_rate = ${exchangeRate}, remaining_amount = ${remainingAmount}, 
+              realized_profit = ${realizedProfit}, from_asset = ${fromAsset}, to_asset = ${toAsset},
+              from_amount = ${fromAmount}, to_amount = ${toAmount}, asset_exchange_rate = ${assetExchangeRate}
+          WHERE id = ${id}
+        `;
+      } else {
+        const db = await getSqliteDb();
+        if (db) {
+          db.prepare(`
+            UPDATE transactions 
+            SET type = ?, asset = ?, pair = ?, amount = ?, price = ?, exchange_rate = ?, 
+                remaining_amount = ?, realized_profit = ?, from_asset = ?, to_asset = ?,
+                from_amount = ?, to_amount = ?, asset_exchange_rate = ?
+            WHERE id = ?
+          `).run(type, asset, pair, amount, price, exchangeRate, remainingAmount, realizedProfit, fromAsset, toAsset, fromAmount, toAmount, assetExchangeRate, id);
+        }
+      }
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
   });
+
+async function startServer() {
+  const PORT = 3000;
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
@@ -226,4 +439,10 @@ async function startServer() {
   });
 }
 
-startServer();
+// Export for Vercel
+export default app;
+
+if (process.env.NODE_ENV !== "production") {
+  startServer();
+}
+

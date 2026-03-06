@@ -1,5 +1,5 @@
 {
-  "name": "Crypto P/L Tracker",
+  "name": "Crypto-Tracker",
   "description": "A personal cryptocurrency profit and loss tracker for ETH and SOL with real-time price updates from Binance.",
   "requestFramePermissions": []
 }
