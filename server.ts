@@ -484,6 +484,16 @@ app.get("/api/prices", async (req, res) => {
     }
   });
 
+// Global Error Handler
+app.use((err: any, req: any, res: any, next: any) => {
+  console.error("GLOBAL ERROR:", err);
+  res.status(500).json({ 
+    error: "Internal Server Error", 
+    message: err.message || "Unknown error",
+    stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+  });
+});
+
 // Vite middleware for development
 if (process.env.NODE_ENV !== "production") {
   const vitePromise = createViteServer({

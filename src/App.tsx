@@ -74,13 +74,18 @@ export default function App() {
         setIsModalOpen(false);
         loadData();
       } else {
-        const errorData = await res.json();
-        console.error("Server error details:", errorData);
-        alert(`儲存失敗: ${errorData.error || '資料庫連線異常，請確認 Vercel Postgres 已正確配置'}`);
+        const text = await res.text();
+        try {
+          const errorData = JSON.parse(text);
+          alert(`儲存失敗: ${errorData.error || '資料庫連線異常，請確認 Vercel Postgres 已正確配置'}`);
+        } catch (e) {
+          alert(`伺服器錯誤 (${res.status}): ${text.substring(0, 100)}...`);
+        }
       }
     } catch (error) {
       console.error("Failed to add transaction:", error);
-      alert(`網路錯誤: ${error instanceof Error ? error.message : '連線失敗'}。請檢查 Vercel Logs 或確認資料庫設定。`);
+      const msg = error instanceof Error ? error.message : '連線失敗';
+      alert(`網路錯誤: ${msg}。請檢查 Vercel Logs 或確認資料庫設定。`);
     }
   };
 
@@ -134,6 +139,9 @@ export default function App() {
       if (res.ok) {
         alert("資料庫已重置");
         loadData();
+      } else {
+        const text = await res.text();
+        alert(`重置失敗 (${res.status}): ${text.substring(0, 100)}...`);
       }
     } catch (error) {
       console.error("Failed to reset database:", error);
