@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>My Google AI Studio App</title>
+    <script>
+      // Handle "Cannot redefine property: ethereum" error caused by browser extensions
+      try {
+        const originalDefineProperty = Object.defineProperty;
+        Object.defineProperty = function(obj, prop, descriptor) {
+          if (prop === 'ethereum' && obj === window) {
+            try {
+              return originalDefineProperty.apply(this, arguments);
+            } catch (e) {
+              console.warn('Caught attempt to redefine window.ethereum:', e);
+              return obj;
+            }
+          }
+          return originalDefineProperty.apply(this, arguments);
+        };
+      } catch (e) {
+        console.error('Error in ethereum property guard:', e);
+      }
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
