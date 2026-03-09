@@ -46,7 +46,14 @@ export default function TransactionForm({ onAdd, onUpdate, currentExchangeRate, 
         setToAsset(editData.toAsset || 'SOL');
         setFromAmount((editData.fromAmount ?? '').toString());
         setToAmount((editData.toAmount ?? '').toString());
-        setAssetExchangeRate((editData.assetExchangeRate ?? '').toString());
+        
+        // If ETH/SOL pair, display as SOL/ETH (0.033)
+        // Stored value is ETH/SOL (30)
+        if ((editData.fromAsset === 'ETH' && editData.toAsset === 'SOL') || (editData.fromAsset === 'SOL' && editData.toAsset === 'ETH')) {
+           setAssetExchangeRate((1 / (editData.assetExchangeRate || 1)).toFixed(8).replace(/\.?0+$/, ''));
+        } else {
+           setAssetExchangeRate((editData.assetExchangeRate ?? '').toString());
+        }
       }
     } else if (templateData) {
       if (templateData.type) setType(templateData.type);
@@ -154,20 +161,36 @@ export default function TransactionForm({ onAdd, onUpdate, currentExchangeRate, 
   const handleFromAmountChange = (val: string) => {
     setFromAmount(val);
     const from = parseFloat(val) || 0;
-    const rate = parseFloat(assetExchangeRate) || 0;
-    if (from > 0 && rate > 0) {
-      const to = from * rate;
-      setToAmount(to.toFixed(8).replace(/\.?0+$/, ''));
+    const to = parseFloat(toAmount) || 0;
+    if (from > 0 && to > 0) {
+      let rate = 0;
+      if ((fromAsset === 'ETH' && toAsset === 'SOL') || (fromAsset === 'SOL' && toAsset === 'ETH')) {
+        // Always calculate SOL/ETH rate (Price of 1 SOL in ETH)
+        // If from=ETH, to=SOL: rate = from / to (ETH / SOL)
+        // If from=SOL, to=ETH: rate = to / from (ETH / SOL)
+        if (fromAsset === 'ETH') rate = from / to;
+        else rate = to / from;
+      } else {
+        rate = to / from;
+      }
+      setAssetExchangeRate(rate.toFixed(8).replace(/\.?0+$/, ''));
     }
   };
 
   const handleToAmountChange = (val: string) => {
     setToAmount(val);
+    const from = parseFloat(fromAmount) || 0;
     const to = parseFloat(val) || 0;
-    const rate = parseFloat(assetExchangeRate) || 0;
-    if (to > 0 && rate > 0) {
-      const from = to / rate;
-      setFromAmount(from.toFixed(8).replace(/\.?0+$/, ''));
+    if (from > 0 && to > 0) {
+      let rate = 0;
+      if ((fromAsset === 'ETH' && toAsset === 'SOL') || (fromAsset === 'SOL' && toAsset === 'ETH')) {
+        // Always calculate SOL/ETH rate
+        if (fromAsset === 'ETH') rate = from / to;
+        else rate = to / from;
+      } else {
+        rate = to / from;
+      }
+      setAssetExchangeRate(rate.toFixed(8).replace(/\.?0+$/, ''));
     }
   };
 
@@ -177,12 +200,25 @@ export default function TransactionForm({ onAdd, onUpdate, currentExchangeRate, 
     const from = parseFloat(fromAmount) || 0;
     const to = parseFloat(toAmount) || 0;
     if (rate > 0) {
-      if (from > 0) {
-        const calculatedTo = from * rate;
-        setToAmount(calculatedTo.toFixed(8).replace(/\.?0+$/, ''));
-      } else if (to > 0) {
-        const calculatedFrom = to / rate;
-        setFromAmount(calculatedFrom.toFixed(8).replace(/\.?0+$/, ''));
+      if ((fromAsset === 'ETH' && toAsset === 'SOL') || (fromAsset === 'SOL' && toAsset === 'ETH')) {
+         // rate is SOL/ETH (e.g., 0.033)
+         if (from > 0) {
+            // Recalc To
+            if (fromAsset === 'ETH') setToAmount((from / rate).toFixed(8).replace(/\.?0+$/, '')); // from(ETH) / rate(ETH/SOL) = SOL
+            else setToAmount((from * rate).toFixed(8).replace(/\.?0+$/, '')); // from(SOL) * rate(ETH/SOL) = ETH
+         } else if (to > 0) {
+            // Recalc From
+            if (fromAsset === 'ETH') setFromAmount((to * rate).toFixed(8).replace(/\.?0+$/, '')); // to(SOL) * rate(ETH/SOL) = ETH
+            else setFromAmount((to / rate).toFixed(8).replace(/\.?0+$/, '')); // to(ETH) / rate(ETH/SOL) = SOL
+         }
+      } else {
+         if (from > 0) {
+           const calculatedTo = from * rate;
+           setToAmount(calculatedTo.toFixed(8).replace(/\.?0+$/, ''));
+         } else if (to > 0) {
+           const calculatedFrom = to / rate;
+           setFromAmount(calculatedFrom.toFixed(8).replace(/\.?0+$/, ''));
+         }
       }
     }
   };
@@ -231,23 +267,6 @@ export default function TransactionForm({ onAdd, onUpdate, currentExchangeRate, 
     }
   };
 
-  // Auto-calculate asset exchange rate (Price of ETH in SOL if ETH/SOL pair)
-  useEffect(() => {
-    const from = parseFloat(fromAmount);
-    const to = parseFloat(toAmount);
-    if (from > 0 && to > 0) {
-      let rate = 0;
-      if (fromAsset === 'ETH' && toAsset === 'SOL') {
-        rate = to / from; // SOL per ETH
-      } else if (fromAsset === 'SOL' && toAsset === 'ETH') {
-        rate = from / to; // SOL per ETH
-      } else {
-        rate = to / from; // Default: Price of FromAsset in ToAsset
-      }
-      setAssetExchangeRate(rate.toFixed(6).replace(/\.?0+$/, ''));
-    }
-  }, [fromAmount, toAmount, fromAsset, toAsset]);
-
   // Reset selected lots when asset or type changes
   useEffect(() => {
     setSelectedLots({});
@@ -294,14 +313,19 @@ export default function TransactionForm({ onAdd, onUpdate, currentExchangeRate, 
       if (!fromAmount || !toAmount) return;
       let rate = parseFloat(assetExchangeRate);
       if (!rate) {
-        if (fromAsset === 'ETH' && toAsset === 'SOL') {
-          rate = parseFloat(toAmount) / parseFloat(fromAmount);
-        } else if (fromAsset === 'SOL' && toAsset === 'ETH') {
-          rate = parseFloat(fromAmount) / parseFloat(toAmount);
+        if ((fromAsset === 'ETH' && toAsset === 'SOL') || (fromAsset === 'SOL' && toAsset === 'ETH')) {
+             if (fromAsset === 'ETH') rate = parseFloat(fromAmount) / parseFloat(toAmount);
+             else rate = parseFloat(toAmount) / parseFloat(fromAmount);
         } else {
-          rate = parseFloat(toAmount) / parseFloat(fromAmount);
+             rate = parseFloat(toAmount) / parseFloat(fromAmount);
         }
       }
+      
+      // If ETH/SOL pair, we displayed SOL/ETH (e.g., 0.033), but want to store ETH/SOL (e.g., 30)
+      if ((fromAsset === 'ETH' && toAsset === 'SOL') || (fromAsset === 'SOL' && toAsset === 'ETH')) {
+          rate = 1 / rate;
+      }
+
       const data = {
         type,
         fromAsset,
@@ -425,7 +449,22 @@ export default function TransactionForm({ onAdd, onUpdate, currentExchangeRate, 
               <label className="block text-xs font-medium text-gray-500 uppercase mb-1">從 (From)</label>
               <select 
                 value={fromAsset} 
-                onChange={(e) => setFromAsset(e.target.value as Asset)}
+                onChange={(e) => {
+                  const newFromAsset = e.target.value as Asset;
+                  setFromAsset(newFromAsset);
+                  const from = parseFloat(fromAmount) || 0;
+                  const to = parseFloat(toAmount) || 0;
+                  if (from > 0 && to > 0) {
+                    let rate = 0;
+                    if ((newFromAsset === 'ETH' && toAsset === 'SOL') || (newFromAsset === 'SOL' && toAsset === 'ETH')) {
+                      if (newFromAsset === 'ETH') rate = from / to;
+                      else rate = to / from;
+                    } else {
+                      rate = to / from;
+                    }
+                    setAssetExchangeRate(rate.toFixed(8).replace(/\.?0+$/, ''));
+                  }
+                }}
                 className="w-full p-2 bg-white border border-gray-200 rounded-lg outline-none"
               >
                 <option value="ETH">ETH</option>
@@ -438,7 +477,22 @@ export default function TransactionForm({ onAdd, onUpdate, currentExchangeRate, 
               <label className="block text-xs font-medium text-gray-500 uppercase mb-1">到 (To)</label>
               <select 
                 value={toAsset} 
-                onChange={(e) => setToAsset(e.target.value as Asset)}
+                onChange={(e) => {
+                  const newToAsset = e.target.value as Asset;
+                  setToAsset(newToAsset);
+                  const from = parseFloat(fromAmount) || 0;
+                  const to = parseFloat(toAmount) || 0;
+                  if (from > 0 && to > 0) {
+                    let rate = 0;
+                    if ((fromAsset === 'ETH' && newToAsset === 'SOL') || (fromAsset === 'SOL' && newToAsset === 'ETH')) {
+                      if (fromAsset === 'ETH') rate = from / to;
+                      else rate = to / from;
+                    } else {
+                      rate = to / from;
+                    }
+                    setAssetExchangeRate(rate.toFixed(8).replace(/\.?0+$/, ''));
+                  }
+                }}
                 className="w-full p-2 bg-white border border-gray-200 rounded-lg outline-none"
               >
                 <option value="ETH">ETH</option>
@@ -464,7 +518,9 @@ export default function TransactionForm({ onAdd, onUpdate, currentExchangeRate, 
             </div>
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-500 uppercase mb-1">兌換匯率 ({fromAsset}/{toAsset})</label>
+            <label className="block text-xs font-medium text-gray-500 uppercase mb-1">
+              兌換匯率 ({(fromAsset === 'ETH' && toAsset === 'SOL') || (fromAsset === 'SOL' && toAsset === 'ETH') ? 'SOL/ETH' : `${fromAsset}/${toAsset}`})
+            </label>
             <input 
               type="number" step="any" value={assetExchangeRate} onChange={(e) => handleAssetExchangeRateChange(e.target.value)}
               placeholder="0.00" className="w-full p-2 bg-white border border-gray-200 rounded-lg outline-none"

@@ -111,7 +111,7 @@ export default function SidebarSummary({ transactions, prices, usdtTwd, onReset 
                 <div className="flex items-center gap-1.5">
                   <span className="text-xs font-bold text-gray-700">{asset}</span>
                   <span className={`text-[8px] font-bold px-1 rounded ${change >= 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
-                    {change >= 0 ? '+' : ''}{change}%
+                    {change >= 0 ? '+' : ''}{change.toFixed(1)}%
                   </span>
                 </div>
                 <span className="text-sm font-bold text-gray-900">

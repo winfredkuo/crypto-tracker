@@ -81,11 +81,13 @@ export default function ExchangeHistory({ transactions, onDelete, onEdit }: Prop
                   <td className="px-4 py-4 text-right">
                     <div className="flex flex-col items-end">
                       <span className="text-sm font-bold text-gray-700">
-                        {tx.assetExchangeRate?.toFixed(6).replace(/\.?0+$/, '')}
+                        {((tx.fromAsset === 'ETH' && tx.toAsset === 'SOL') || (tx.fromAsset === 'SOL' && tx.toAsset === 'ETH'))
+                          ? (1 / (tx.assetExchangeRate || 1)).toFixed(6).replace(/\.?0+$/, '')
+                          : tx.assetExchangeRate?.toFixed(6).replace(/\.?0+$/, '')}
                       </span>
                       <span className="text-[10px] text-gray-400">
                         {(tx.fromAsset === 'ETH' && tx.toAsset === 'SOL') || (tx.fromAsset === 'SOL' && tx.toAsset === 'ETH') 
-                          ? 'ETH/SOL' 
+                          ? 'SOL/ETH' 
                           : `${tx.fromAsset}/${tx.toAsset}`}
                       </span>
                     </div>
