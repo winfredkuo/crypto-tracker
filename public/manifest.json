@@ -1,0 +1,17 @@
+{
+  "name": "CryptoTrack",
+  "short_name": "CryptoTrack",
+  "description": "加密貨幣資產追蹤工具",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F8F9FA",
+  "theme_color": "#10b981",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

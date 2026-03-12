@@ -5,7 +5,6 @@ import Dashboard from './components/Dashboard';
 import ExchangeHistory from './components/ExchangeHistory';
 import TransactionForm from './components/TransactionForm';
 import SidebarSummary from './components/SidebarSummary';
-import MarketInsights from './components/MarketInsights';
 import Modal from './components/Modal';
 import DbCheck from './components/DbCheck';
 import { RefreshCw, LayoutDashboard, Plus, PlusCircle, ArrowRightLeft } from 'lucide-react';
@@ -240,10 +239,6 @@ export default function App() {
           <div className="lg:col-span-9">
             {currentView === 'DASHBOARD' ? (
               <div className="space-y-6">
-                <MarketInsights 
-                  prices={prices}
-                  transactions={transactions}
-                />
                 <Dashboard 
                   transactions={transactions} 
                   prices={prices}
