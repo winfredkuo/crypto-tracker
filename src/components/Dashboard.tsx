@@ -109,20 +109,14 @@ export default function Dashboard({ transactions, prices, onDelete, onEdit, onQu
                     <td className="px-3 py-3 text-xs text-gray-600 font-medium">{tx.amount}</td>
                     <td className="px-3 py-3 text-xs text-gray-600">
                       <span className="font-medium">${(tx.price || 0).toLocaleString(undefined, { maximumFractionDigits: 4 })}</span>
-                      <span className="text-[10px] text-gray-400 ml-0.5 font-normal">USDT</span>
+                      <span className="text-[10px] text-gray-400 ml-0.5 font-normal">{tx.pair || 'USDT'}</span>
                     </td>
                     <td className="px-3 py-3">
                       <div className="flex flex-col">
                         <span className="text-xs font-bold text-gray-700">
                           {isTWD 
-                            ? `${(tx.originalCost || ((tx.amount || 0) * (tx.price || 0) * (tx.exchangeRate || 31.5))).toLocaleString(undefined, { maximumFractionDigits: 0 })} TWD` 
-                            : `${(tx.originalCost || ((tx.amount || 0) * (tx.price || 0))).toLocaleString(undefined, { maximumFractionDigits: 2 })} USDT`
-                          }
-                        </span>
-                        <span className="text-[10px] text-gray-400">
-                          {isTWD 
-                            ? `≈ ${((tx.amount || 0) * (tx.price || 0)).toLocaleString(undefined, { maximumFractionDigits: 2 })} USDT` 
-                            : `≈ ${((tx.amount || 0) * (tx.price || 0) * (tx.exchangeRate || 31.5)).toLocaleString(undefined, { maximumFractionDigits: 0 })} TWD`
+                            ? `${((tx.originalCost !== undefined ? tx.originalCost : (tx.amount || 0) * (tx.price || 0))).toLocaleString(undefined, { maximumFractionDigits: 0 })} TWD` 
+                            : `${((tx.originalCost !== undefined ? tx.originalCost : (tx.amount || 0) * (tx.price || 0))).toLocaleString(undefined, { maximumFractionDigits: 2 })} USDT`
                           }
                         </span>
                       </div>
@@ -130,8 +124,20 @@ export default function Dashboard({ transactions, prices, onDelete, onEdit, onQu
                     <td className="px-3 py-3 text-xs font-medium text-emerald-600">
                       {tx.type === 'BUY' ? tx.remainingAmount?.toFixed(4) : '-'}
                     </td>
-                    <td className={`px-3 py-3 text-xs font-bold ${(tx.realizedProfit || 0) >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                      {tx.realizedProfit !== 0 && tx.realizedProfit !== null && tx.realizedProfit !== undefined ? `${tx.realizedProfit >= 0 ? '+' : ''}${tx.realizedProfit.toFixed(1)}` : '-'}
+                    <td className="px-3 py-3 text-xs font-bold">
+                      <div className="flex flex-col gap-1">
+                        {tx.realizedProfitUSDT !== undefined && tx.realizedProfitUSDT !== null && (
+                          <span className={tx.realizedProfitUSDT >= 0 ? 'text-emerald-600' : 'text-rose-600'}>
+                            {tx.realizedProfitUSDT >= 0 ? '+' : ''}{tx.realizedProfitUSDT.toFixed(2)} U
+                          </span>
+                        )}
+                        {tx.realizedProfitCoin !== undefined && tx.realizedProfitCoin !== null && (
+                          <span className={tx.realizedProfitCoin >= 0 ? 'text-emerald-600' : 'text-rose-600'}>
+                            {tx.realizedProfitCoin >= 0 ? '+' : ''}{tx.realizedProfitCoin.toFixed(4)} 幣
+                          </span>
+                        )}
+                        {tx.realizedProfitUSDT === undefined && tx.realizedProfitCoin === undefined && '-'}
+                      </div>
                     </td>
                     <td className="px-3 py-3 text-right">
                       <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">

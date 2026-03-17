@@ -20,14 +20,3 @@ export async function fetchPrices(): Promise<PriceData[]> {
     throw error;
   }
 }
-
-// Simple USDT/TWD rate fetcher (using our backend proxy)
-export async function fetchUSDTTWD(): Promise<number> {
-  try {
-    const res = await fetch("/api/exchange-rate");
-    const data = await res.json();
-    return data.rates.TWD || 31.5; // Fallback to 31.5
-  } catch {
-    return 31.5;
-  }
-}

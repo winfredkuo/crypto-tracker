@@ -47,7 +47,8 @@ async function initDatabase() {
           price DOUBLE PRECISION,
           exchange_rate DOUBLE PRECISION,
           remaining_amount DOUBLE PRECISION,
-          realized_profit DOUBLE PRECISION DEFAULT 0,
+          realized_profit_coin DOUBLE PRECISION DEFAULT 0,
+          realized_profit_usdt DOUBLE PRECISION DEFAULT 0,
           from_asset TEXT,
           to_asset TEXT,
           from_amount DOUBLE PRECISION,
@@ -64,7 +65,8 @@ async function initDatabase() {
         "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS from_amount DOUBLE PRECISION",
         "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS to_amount DOUBLE PRECISION",
         "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS asset_exchange_rate DOUBLE PRECISION",
-        "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS realized_profit DOUBLE PRECISION DEFAULT 0"
+        "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS realized_profit_coin DOUBLE PRECISION DEFAULT 0",
+        "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS realized_profit_usdt DOUBLE PRECISION DEFAULT 0"
       ];
 
       for (const query of migrations) {
@@ -237,18 +239,6 @@ app.get("/api/prices", async (req, res) => {
     }
   });
 
-  app.get("/api/exchange-rate", async (req, res) => {
-    try {
-      const response = await fetch("https://api.exchangerate-api.com/v4/latest/USD");
-      if (!response.ok) throw new Error("Exchange rate API error");
-      const data = await response.json();
-      res.json(data);
-    } catch (error) {
-      console.error("Exchange rate fetch error:", error);
-      res.status(500).json({ error: "Failed to fetch exchange rate" });
-    }
-  });
-
   app.post("/api/admin/reset-db", ensureDb, async (req, res) => {
     try {
       if (usePostgres) {
@@ -285,7 +275,8 @@ app.get("/api/prices", async (req, res) => {
         price: t.price,
         exchangeRate: t.exchange_rate,
         remainingAmount: t.remaining_amount,
-        realizedProfit: t.realized_profit,
+        realizedProfitCoin: t.realized_profit_coin,
+        realizedProfitUSDT: t.realized_profit_usdt,
         fromAsset: t.from_asset,
         toAsset: t.to_asset,
         fromAmount: t.from_amount,
@@ -329,9 +320,10 @@ app.get("/api/prices", async (req, res) => {
         }
   
         if (type === 'SELL') {
-          const { selectedLots } = req.body;
-          let totalProfit = 0;
-          const sellPriceInUSDT = pair === 'USDT' ? safePrice : safePrice / (safeExchangeRate || 1);
+          const { selectedLots, realizedProfitCoin, realizedProfitUSDT } = req.body;
+          
+          const safeRealizedProfitCoin = parseFloat(realizedProfitCoin) || 0;
+          const safeRealizedProfitUSDT = parseFloat(realizedProfitUSDT) || 0;
   
           if (selectedLots && Array.isArray(selectedLots) && selectedLots.length > 0) {
             for (const lotSelection of selectedLots) {
@@ -344,20 +336,15 @@ app.get("/api/prices", async (req, res) => {
               }
   
               if (!buy || buy.remaining_amount < lotSelection.amount) continue;
-  
-              const buyPriceInUSDT = buy.pair === 'USDT' ? buy.price : buy.price / (buy.exchange_rate || 1);
-              const profitFromThisLot = lotSelection.amount * (sellPriceInUSDT - buyPriceInUSDT);
               
               if (usePostgres) {
                 const client = await getDbClient();
                 await client.query(
-                  'UPDATE transactions SET remaining_amount = remaining_amount - $1, realized_profit = realized_profit + $2 WHERE id = $3',
-                  [lotSelection.amount, profitFromThisLot, buy.id]
+                  'UPDATE transactions SET remaining_amount = remaining_amount - $1 WHERE id = $2',
+                  [lotSelection.amount, buy.id]
                 );
                 await client.end();
               }
-              
-              totalProfit += profitFromThisLot;
             }
           } else {
             // FIFO Fallback
@@ -372,20 +359,17 @@ app.get("/api/prices", async (req, res) => {
             let sellAmount = safeAmount;
             for (const buy of buys) {
               if (sellAmount <= 0) break;
-              const buyPriceInUSDT = buy.pair === 'USDT' ? buy.price : buy.price / (buy.exchange_rate || 1);
               const consume = Math.min(sellAmount, buy.remaining_amount);
-              const profitFromThisLot = consume * (sellPriceInUSDT - buyPriceInUSDT);
               
               if (usePostgres) {
                 const client = await getDbClient();
                 await client.query(
-                  'UPDATE transactions SET remaining_amount = remaining_amount - $1, realized_profit = realized_profit + $2 WHERE id = $3',
-                  [consume, profitFromThisLot, buy.id]
+                  'UPDATE transactions SET remaining_amount = remaining_amount - $1 WHERE id = $2',
+                  [consume, buy.id]
                 );
                 await client.end();
               }
               
-              totalProfit += profitFromThisLot;
               sellAmount -= consume;
             }
           }
@@ -393,8 +377,8 @@ app.get("/api/prices", async (req, res) => {
           if (usePostgres) {
             const client = await getDbClient();
             const { rows } = await client.query(
-              'INSERT INTO transactions (type, asset, pair, amount, price, exchange_rate, realized_profit) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id',
-              [type, asset, pair, safeAmount, safePrice, safeExchangeRate, totalProfit]
+              'INSERT INTO transactions (type, asset, pair, amount, price, exchange_rate, realized_profit_coin, realized_profit_usdt) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id',
+              [type, asset, pair, safeAmount, safePrice, safeExchangeRate, safeRealizedProfitCoin, safeRealizedProfitUSDT]
             );
             await client.end();
             console.log("SELL transaction saved to Postgres, ID:", rows[0].id);
@@ -405,11 +389,15 @@ app.get("/api/prices", async (req, res) => {
         }
   
         if (type === 'EXCHANGE') {
+          const { realizedProfitCoin, realizedProfitUSDT } = req.body;
+          const safeRealizedProfitCoin = parseFloat(realizedProfitCoin) || 0;
+          const safeRealizedProfitUSDT = parseFloat(realizedProfitUSDT) || 0;
+
           if (usePostgres) {
             const client = await getDbClient();
             const { rows } = await client.query(
-              'INSERT INTO transactions (type, from_asset, to_asset, from_amount, to_amount, asset_exchange_rate) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id',
-              [type, fromAsset, toAsset, safeFromAmount, safeToAmount, safeAssetExchangeRate]
+              'INSERT INTO transactions (type, from_asset, to_asset, from_amount, to_amount, asset_exchange_rate, realized_profit_coin, realized_profit_usdt) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id',
+              [type, fromAsset, toAsset, safeFromAmount, safeToAmount, safeAssetExchangeRate, safeRealizedProfitCoin, safeRealizedProfitUSDT]
             );
             await client.end();
             console.log("EXCHANGE transaction saved to Postgres, ID:", rows[0].id);
@@ -440,7 +428,7 @@ app.get("/api/prices", async (req, res) => {
   });
 
   app.put("/api/transactions/:id", ensureDb, async (req, res) => {
-    const { type, asset, pair, amount, price, exchangeRate, remainingAmount, realizedProfit, fromAsset, toAsset, fromAmount, toAmount, assetExchangeRate } = req.body;
+    const { type, asset, pair, amount, price, exchangeRate, remainingAmount, realizedProfitCoin, realizedProfitUSDT, fromAsset, toAsset, fromAmount, toAmount, assetExchangeRate } = req.body;
     const id = req.params.id;
 
     try {
@@ -450,10 +438,10 @@ app.get("/api/prices", async (req, res) => {
           `UPDATE transactions 
            SET type = $1, asset = $2, pair = $3, amount = $4, price = $5, 
                exchange_rate = $6, remaining_amount = $7, 
-               realized_profit = $8, from_asset = $9, to_asset = $10,
-               from_amount = $11, to_amount = $12, asset_exchange_rate = $13
-           WHERE id = $14`,
-          [type, asset, pair, amount, price, exchangeRate, remainingAmount, realizedProfit, fromAsset, toAsset, fromAmount, toAmount, assetExchangeRate, id]
+               realized_profit_coin = $8, realized_profit_usdt = $9, from_asset = $10, to_asset = $11,
+               from_amount = $12, to_amount = $13, asset_exchange_rate = $14
+           WHERE id = $15`,
+          [type, asset, pair, amount, price, exchangeRate, remainingAmount, realizedProfitCoin, realizedProfitUSDT, fromAsset, toAsset, fromAmount, toAmount, assetExchangeRate, id]
         );
         await client.end();
       }

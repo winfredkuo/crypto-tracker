@@ -12,7 +12,8 @@ export interface Transaction {
   exchangeRate?: number; // TWD per USDT at time of transaction
   originalCost?: number; // The exact amount entered by user in the pair currency
   remainingAmount?: number; // For BUY lots
-  realizedProfit?: number; // Profit realized from this specific lot (for BUY) or by this sale (for SELL)
+  realizedProfitCoin?: number; // 幣本位盈虧
+  realizedProfitUSDT?: number; // U本位盈虧
   timestamp: string;
   // For EXCHANGE
   fromAsset?: Asset;

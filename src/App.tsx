@@ -1,24 +1,49 @@
 import { useState, useEffect } from 'react';
 import { Transaction, PriceData } from './types';
-import { fetchPrices, fetchUSDTTWD } from './services/binance';
+import { fetchPrices } from './services/binance';
 import Dashboard from './components/Dashboard';
 import ExchangeHistory from './components/ExchangeHistory';
 import TransactionForm from './components/TransactionForm';
 import SidebarSummary from './components/SidebarSummary';
 import Modal from './components/Modal';
 import DbCheck from './components/DbCheck';
-import { RefreshCw, LayoutDashboard, Plus, PlusCircle, ArrowRightLeft } from 'lucide-react';
+import { RefreshCw, LayoutDashboard, Plus, PlusCircle, ArrowRightLeft, Download } from 'lucide-react';
 
 export default function App() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [prices, setPrices] = useState<PriceData[]>([]);
-  const [usdtTwd, setUsdtTwd] = useState(31.5);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null);
   const [templateTransaction, setTemplateTransaction] = useState<Partial<Transaction> | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [currentView, setCurrentView] = useState<'DASHBOARD' | 'EXCHANGE'>('DASHBOARD');
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [isInstallable, setIsInstallable] = useState(false);
+
+  useEffect(() => {
+    const handleBeforeInstallPrompt = (e: Event) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+      setIsInstallable(true);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    };
+  }, []);
+
+  const handleInstallClick = async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    if (outcome === 'accepted') {
+      setIsInstallable(false);
+    }
+    setDeferredPrompt(null);
+  };
 
   const loadData = async () => {
     try {
@@ -29,19 +54,12 @@ export default function App() {
         setTransactions(txs);
       }
 
-      // Fetch prices and exchange rate independently
+      // Fetch prices independently
       try {
         const priceData = await fetchPrices();
         setPrices(priceData);
       } catch (e) {
         console.warn("Failed to fetch prices:", e);
-      }
-
-      try {
-        const rate = await fetchUSDTTWD();
-        setUsdtTwd(rate);
-      } catch (e) {
-        console.warn("Failed to fetch exchange rate:", e);
       }
       
     } catch (error) {
@@ -173,6 +191,15 @@ export default function App() {
           </div>
           
           <div className="flex items-center gap-4">
+            {isInstallable && (
+              <button
+                onClick={handleInstallClick}
+                className="flex items-center gap-2 px-3 py-1.5 text-sm font-bold text-emerald-600 bg-emerald-50 hover:bg-emerald-100 rounded-lg transition-colors border border-emerald-200"
+              >
+                <Download className="w-4 h-4" />
+                <span className="hidden sm:inline">安裝 App</span>
+              </button>
+            )}
             <DbCheck />
             <button 
               onClick={handleRefresh}
@@ -230,7 +257,6 @@ export default function App() {
             <SidebarSummary 
               transactions={transactions}
               prices={prices}
-              usdtTwd={usdtTwd}
               onReset={handleResetDatabase}
             />
           </div>
@@ -289,7 +315,6 @@ export default function App() {
         <TransactionForm 
           onAdd={handleAddTransaction} 
           onUpdate={handleUpdateTransaction}
-          currentExchangeRate={usdtTwd} 
           transactions={transactions}
           editData={editingTransaction}
           templateData={templateTransaction}

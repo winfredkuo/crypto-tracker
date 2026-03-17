@@ -1,25 +1,26 @@
 import React, { useState, useEffect } from 'react';
 import { Asset, Pair, Transaction, TransactionType } from '../types';
-import { PlusCircle, ArrowRightLeft, CheckSquare, Square } from 'lucide-react';
+import { PlusCircle, ArrowRightLeft, CheckSquare, Square, Calculator } from 'lucide-react';
 
 interface Props {
   onAdd: (tx: any) => void;
   onUpdate?: (id: number, tx: any) => void;
-  currentExchangeRate: number;
   transactions: Transaction[];
   editData?: Transaction | null;
   templateData?: Partial<Transaction> | null;
   onCancelEdit?: () => void;
 }
 
-export default function TransactionForm({ onAdd, onUpdate, currentExchangeRate, transactions, editData, templateData, onCancelEdit }: Props) {
+export default function TransactionForm({ onAdd, onUpdate, transactions, editData, templateData, onCancelEdit }: Props) {
   const [type, setType] = useState<TransactionType>('BUY');
   const [asset, setAsset] = useState<Asset>('ETH');
   const [pair, setPair] = useState<Pair>('USDT');
   const [amount, setAmount] = useState('');
   const [price, setPrice] = useState('');
   const [totalCost, setTotalCost] = useState('');
-  const [exchangeRate, setExchangeRate] = useState((currentExchangeRate || 31.5).toString());
+  const [exchangeRate, setExchangeRate] = useState('31.5');
+  const [realizedProfitCoin, setRealizedProfitCoin] = useState('');
+  const [realizedProfitUSDT, setRealizedProfitUSDT] = useState('');
 
   // For EXCHANGE
   const [fromAsset, setFromAsset] = useState<Asset>('ETH');
@@ -32,6 +33,11 @@ export default function TransactionForm({ onAdd, onUpdate, currentExchangeRate, 
   const [selectedLots, setSelectedLots] = useState<Record<number, number>>({});
   const [isManualSelection, setIsManualSelection] = useState(false);
 
+  // Calculator Modal State
+  const [showCalculator, setShowCalculator] = useState(false);
+  const [calcInput, setCalcInput] = useState('');
+  const [calcTarget, setCalcTarget] = useState<'amount' | 'price' | 'totalCost' | 'realizedProfitCoin' | 'realizedProfitUSDT' | 'fromAmount' | 'toAmount' | 'assetExchangeRate' | ''>('');
+
   useEffect(() => {
     if (editData) {
       setType(editData.type);
@@ -39,8 +45,10 @@ export default function TransactionForm({ onAdd, onUpdate, currentExchangeRate, 
       setPair(editData.pair || 'USDT');
       setAmount((editData.amount ?? '').toString());
       setPrice((editData.price ?? '').toString());
-      setTotalCost(((editData.amount || 0) * (editData.price || 0)).toString());
-      setExchangeRate((editData.exchangeRate ?? currentExchangeRate ?? 31.5).toString());
+      setTotalCost((editData.originalCost ?? ((editData.amount || 0) * (editData.price || 0))).toString());
+      setExchangeRate((editData.exchangeRate ?? 31.5).toString());
+      setRealizedProfitCoin((editData.realizedProfitCoin ?? '').toString());
+      setRealizedProfitUSDT((editData.realizedProfitUSDT ?? '').toString());
       if (editData.type === 'EXCHANGE') {
         setFromAsset(editData.fromAsset || 'ETH');
         setToAsset(editData.toAsset || 'SOL');
@@ -70,201 +78,70 @@ export default function TransactionForm({ onAdd, onUpdate, currentExchangeRate, 
         setSelectedLots({ [templateData.id]: templateData.amount || 0 });
       }
     } else {
-      setExchangeRate((currentExchangeRate || 31.5).toString());
+      setExchangeRate('31.5');
     }
-  }, [editData, templateData, currentExchangeRate]);
+  }, [editData, templateData]);
 
-  // Auto-calculate logic for BUY/SELL
-  const handleAmountChange = (val: string) => {
-    setAmount(val);
-    const a = parseFloat(val) || 0;
-    const p = parseFloat(price) || 0;
-    const t = parseFloat(totalCost) || 0;
-    const rate = parseFloat(exchangeRate) || 1; // Default to 1 to avoid 0 issues
-
-    if (a > 0) {
-      if (p > 0) {
-        // Update total cost based on price
-        const totalUSDT = a * p;
-        const totalDisplay = pair === 'TWD' ? totalUSDT * rate : totalUSDT;
-        setTotalCost(totalDisplay.toFixed(2).replace(/\.?0+$/, ''));
-      } else if (t > 0) {
-        // Update price based on total cost
-        if (pair === 'TWD' && rate > 0) {
-          const totalUSDT = t / rate;
-          const calculatedPrice = totalUSDT / a;
-          setPrice(calculatedPrice.toFixed(8).replace(/\.?0+$/, ''));
-        } else if (pair === 'USDT') {
-          const calculatedPrice = t / a;
-          setPrice(calculatedPrice.toFixed(8).replace(/\.?0+$/, ''));
-        }
-      }
-    }
-  };
-
-  const handleTotalCostChange = (val: string) => {
-    setTotalCost(val);
-    const t = parseFloat(val) || 0;
-    const a = parseFloat(amount) || 0;
-    const p = parseFloat(price) || 0;
-    const rate = parseFloat(exchangeRate) || 1;
-
-    if (t > 0) {
-      if (a > 0) {
-        if (pair === 'TWD' && rate > 0) {
-          const totalUSDT = t / rate;
-          const calculatedPrice = totalUSDT / a;
-          setPrice(calculatedPrice.toFixed(8).replace(/\.?0+$/, ''));
-        } else if (pair === 'USDT') {
-          const calculatedPrice = t / a;
-          setPrice(calculatedPrice.toFixed(8).replace(/\.?0+$/, ''));
-        }
-      } else if (p > 0) {
-        if (pair === 'TWD' && rate > 0) {
-          const totalUSDT = t / rate;
-          const calculatedAmount = totalUSDT / p;
-          setAmount(calculatedAmount.toFixed(8).replace(/\.?0+$/, ''));
-        } else if (pair === 'USDT') {
-          const calculatedAmount = t / p;
-          setAmount(calculatedAmount.toFixed(8).replace(/\.?0+$/, ''));
-        }
-      }
-    }
-  };
-
-  const handlePriceChange = (val: string) => {
-    setPrice(val);
-    const p = parseFloat(val) || 0; // Price in USDT
-    const a = parseFloat(amount) || 0;
-    const t = parseFloat(totalCost) || 0;
-    const rate = parseFloat(exchangeRate) || 1;
-
-    if (p > 0) {
-      if (a > 0) {
-        const totalUSDT = p * a;
-        const totalDisplay = pair === 'TWD' ? totalUSDT * rate : totalUSDT;
-        setTotalCost(totalDisplay.toFixed(2).replace(/\.?0+$/, ''));
-      } else if (t > 0) {
-        if (pair === 'TWD' && rate > 0) {
-          const totalUSDT = t / rate;
-          const calculatedAmount = totalUSDT / p;
-          setAmount(calculatedAmount.toFixed(8).replace(/\.?0+$/, ''));
-        } else if (pair === 'USDT') {
-          const calculatedAmount = t / p;
-          setAmount(calculatedAmount.toFixed(8).replace(/\.?0+$/, ''));
-        }
-      }
-    }
-  };
-
-  // Auto-calculate logic for EXCHANGE
+  const handleAmountChange = (val: string) => setAmount(val);
+  const handleTotalCostChange = (val: string) => setTotalCost(val);
+  const handlePriceChange = (val: string) => setPrice(val);
   const handleFromAmountChange = (val: string) => {
     setFromAmount(val);
-    const from = parseFloat(val) || 0;
-    const to = parseFloat(toAmount) || 0;
-    if (from > 0 && to > 0) {
-      let rate = 0;
+    const from = parseFloat(val);
+    const to = parseFloat(toAmount);
+    if (!isNaN(from) && !isNaN(to) && from > 0 && to > 0) {
       if ((fromAsset === 'ETH' && toAsset === 'SOL') || (fromAsset === 'SOL' && toAsset === 'ETH')) {
-        // Always calculate SOL/ETH rate (Price of 1 SOL in ETH)
-        // If from=ETH, to=SOL: rate = from / to (ETH / SOL)
-        // If from=SOL, to=ETH: rate = to / from (ETH / SOL)
-        if (fromAsset === 'ETH') rate = from / to;
-        else rate = to / from;
+        if (fromAsset === 'ETH') setAssetExchangeRate((to / from).toFixed(8).replace(/\.?0+$/, ''));
+        else setAssetExchangeRate((from / to).toFixed(8).replace(/\.?0+$/, ''));
       } else {
-        rate = to / from;
+        setAssetExchangeRate((to / from).toFixed(8).replace(/\.?0+$/, ''));
       }
-      setAssetExchangeRate(rate.toFixed(8).replace(/\.?0+$/, ''));
     }
   };
 
   const handleToAmountChange = (val: string) => {
     setToAmount(val);
-    const from = parseFloat(fromAmount) || 0;
-    const to = parseFloat(val) || 0;
-    if (from > 0 && to > 0) {
-      let rate = 0;
+    const from = parseFloat(fromAmount);
+    const to = parseFloat(val);
+    if (!isNaN(from) && !isNaN(to) && from > 0 && to > 0) {
       if ((fromAsset === 'ETH' && toAsset === 'SOL') || (fromAsset === 'SOL' && toAsset === 'ETH')) {
-        // Always calculate SOL/ETH rate
-        if (fromAsset === 'ETH') rate = from / to;
-        else rate = to / from;
+        if (fromAsset === 'ETH') setAssetExchangeRate((to / from).toFixed(8).replace(/\.?0+$/, ''));
+        else setAssetExchangeRate((from / to).toFixed(8).replace(/\.?0+$/, ''));
       } else {
-        rate = to / from;
-      }
-      setAssetExchangeRate(rate.toFixed(8).replace(/\.?0+$/, ''));
-    }
-  };
-
-  const handleAssetExchangeRateChange = (val: string) => {
-    setAssetExchangeRate(val);
-    const rate = parseFloat(val) || 0;
-    const from = parseFloat(fromAmount) || 0;
-    const to = parseFloat(toAmount) || 0;
-    if (rate > 0) {
-      if ((fromAsset === 'ETH' && toAsset === 'SOL') || (fromAsset === 'SOL' && toAsset === 'ETH')) {
-         // rate is SOL/ETH (e.g., 0.033)
-         if (from > 0) {
-            // Recalc To
-            if (fromAsset === 'ETH') setToAmount((from / rate).toFixed(8).replace(/\.?0+$/, '')); // from(ETH) / rate(ETH/SOL) = SOL
-            else setToAmount((from * rate).toFixed(8).replace(/\.?0+$/, '')); // from(SOL) * rate(ETH/SOL) = ETH
-         } else if (to > 0) {
-            // Recalc From
-            if (fromAsset === 'ETH') setFromAmount((to * rate).toFixed(8).replace(/\.?0+$/, '')); // to(SOL) * rate(ETH/SOL) = ETH
-            else setFromAmount((to / rate).toFixed(8).replace(/\.?0+$/, '')); // to(ETH) / rate(ETH/SOL) = SOL
-         }
-      } else {
-         if (from > 0) {
-           const calculatedTo = from * rate;
-           setToAmount(calculatedTo.toFixed(8).replace(/\.?0+$/, ''));
-         } else if (to > 0) {
-           const calculatedFrom = to / rate;
-           setFromAmount(calculatedFrom.toFixed(8).replace(/\.?0+$/, ''));
-         }
+        setAssetExchangeRate((to / from).toFixed(8).replace(/\.?0+$/, ''));
       }
     }
   };
+  const handleAssetExchangeRateChange = (val: string) => setAssetExchangeRate(val);
+  const handleExchangeRateChange = (val: string) => setExchangeRate(val);
+  const handlePairChange = (newPair: Pair) => setPair(newPair);
 
-  const handleExchangeRateChange = (val: string) => {
-    setExchangeRate(val);
-    const rate = parseFloat(val) || 0;
-    const t = parseFloat(totalCost) || 0;
-    const a = parseFloat(amount) || 0;
-    const p = parseFloat(price) || 0;
-
-    if (rate > 0 && pair === 'TWD') {
-      if (a > 0 && t > 0) {
-        // Update price based on TWD total and new rate
-        const totalUSDT = t / rate;
-        const calculatedPrice = totalUSDT / a;
-        setPrice(calculatedPrice.toFixed(8).replace(/\.?0+$/, ''));
-      } else if (a > 0 && p > 0) {
-        // Update total cost based on price and new rate
-        const totalUSDT = a * p;
-        setTotalCost((totalUSDT * rate).toFixed(2).replace(/\.?0+$/, ''));
-      }
-    }
+  const openCalculator = (target: 'amount' | 'price' | 'totalCost' | 'realizedProfitCoin' | 'realizedProfitUSDT' | 'fromAmount' | 'toAmount' | 'assetExchangeRate') => {
+    setCalcTarget(target);
+    setCalcInput('');
+    setShowCalculator(true);
   };
 
-  const handlePairChange = (newPair: Pair) => {
-    setPair(newPair);
-    const t = parseFloat(totalCost) || 0;
-    const p = parseFloat(price) || 0;
-    const a = parseFloat(amount) || 0;
-    const rate = parseFloat(exchangeRate) || 0;
-
-    if (t > 0 && rate > 0) {
-      if (newPair === 'TWD') {
-        // Was USDT, now TWD
-        setTotalCost((t * rate).toFixed(2).replace(/\.?0+$/, ''));
-      } else {
-        // Was TWD, now USDT
-        setTotalCost((t / rate).toFixed(2).replace(/\.?0+$/, ''));
+  const applyCalculatorResult = () => {
+    try {
+      // Basic math evaluation
+      const result = new Function('return ' + calcInput)();
+      if (!isNaN(result)) {
+        const valStr = result.toString();
+        if (calcTarget === 'amount') handleAmountChange(valStr);
+        if (calcTarget === 'price') handlePriceChange(valStr);
+        if (calcTarget === 'totalCost') handleTotalCostChange(valStr);
+        if (calcTarget === 'realizedProfitCoin') setRealizedProfitCoin(valStr);
+        if (calcTarget === 'realizedProfitUSDT') setRealizedProfitUSDT(valStr);
+        if (calcTarget === 'fromAmount') handleFromAmountChange(valStr);
+        if (calcTarget === 'toAmount') handleToAmountChange(valStr);
+        if (calcTarget === 'assetExchangeRate') handleAssetExchangeRateChange(valStr);
       }
-    } else if (p > 0 && a > 0) {
-      // Recalculate total cost from price and amount
-      const totalUSDT = p * a;
-      const totalDisplay = (newPair === 'TWD' && rate > 0) ? totalUSDT * rate : totalUSDT;
-      setTotalCost(totalDisplay.toFixed(2).replace(/\.?0+$/, ''));
+    } catch (e) {
+      alert('計算式無效');
+      return;
     }
+    setShowCalculator(false);
   };
 
   // Reset selected lots when asset or type changes
@@ -333,6 +210,8 @@ export default function TransactionForm({ onAdd, onUpdate, currentExchangeRate, 
         fromAmount: parseFloat(fromAmount),
         toAmount: parseFloat(toAmount),
         assetExchangeRate: rate,
+        realizedProfitCoin: realizedProfitCoin ? parseFloat(realizedProfitCoin) : undefined,
+        realizedProfitUSDT: realizedProfitUSDT ? parseFloat(realizedProfitUSDT) : undefined
       };
       if (editData && onUpdate) {
         onUpdate(editData.id, data);
@@ -352,7 +231,8 @@ export default function TransactionForm({ onAdd, onUpdate, currentExchangeRate, 
         originalCost: parseFloat(totalCost) || (finalAmount * parseFloat(price)),
         selectedLots: lotData,
         remainingAmount: editData ? editData.remainingAmount : (type === 'BUY' ? finalAmount : undefined),
-        realizedProfit: editData ? editData.realizedProfit : undefined
+        realizedProfitCoin: realizedProfitCoin ? parseFloat(realizedProfitCoin) : undefined,
+        realizedProfitUSDT: realizedProfitUSDT ? parseFloat(realizedProfitUSDT) : undefined
       };
       if (editData && onUpdate) {
         onUpdate(editData.id, data);
@@ -503,14 +383,20 @@ export default function TransactionForm({ onAdd, onUpdate, currentExchangeRate, 
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-medium text-gray-500 uppercase mb-1">賣出數量 ({fromAsset})</label>
+              <label className="flex items-center justify-between text-[10px] font-bold text-gray-400 uppercase mb-1">
+                <span>賣出數量 ({fromAsset})</span>
+                <button type="button" onClick={() => openCalculator('fromAmount')} className="text-emerald-500 hover:text-emerald-600"><Calculator className="w-3 h-3" /></button>
+              </label>
               <input 
                 type="number" step="any" value={fromAmount} onChange={(e) => handleFromAmountChange(e.target.value)}
                 placeholder="0.00" className="w-full p-2 bg-white border border-gray-200 rounded-lg outline-none"
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-500 uppercase mb-1">換得數量 ({toAsset})</label>
+              <label className="flex items-center justify-between text-[10px] font-bold text-gray-400 uppercase mb-1">
+                <span>換得數量 ({toAsset})</span>
+                <button type="button" onClick={() => openCalculator('toAmount')} className="text-emerald-500 hover:text-emerald-600"><Calculator className="w-3 h-3" /></button>
+              </label>
               <input 
                 type="number" step="any" value={toAmount} onChange={(e) => handleToAmountChange(e.target.value)}
                 placeholder="0.00" className="w-full p-2 bg-white border border-gray-200 rounded-lg outline-none"
@@ -518,13 +404,44 @@ export default function TransactionForm({ onAdd, onUpdate, currentExchangeRate, 
             </div>
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-500 uppercase mb-1">
-              兌換匯率 ({(fromAsset === 'ETH' && toAsset === 'SOL') || (fromAsset === 'SOL' && toAsset === 'ETH') ? 'SOL/ETH' : `${fromAsset}/${toAsset}`})
+            <label className="flex items-center justify-between text-[10px] font-bold text-gray-400 uppercase mb-1">
+              <span>兌換匯率 ({(fromAsset === 'ETH' && toAsset === 'SOL') || (fromAsset === 'SOL' && toAsset === 'ETH') ? 'SOL/ETH' : `${fromAsset}/${toAsset}`})</span>
+              <button type="button" onClick={() => openCalculator('assetExchangeRate')} className="text-emerald-500 hover:text-emerald-600"><Calculator className="w-3 h-3" /></button>
             </label>
             <input 
               type="number" step="any" value={assetExchangeRate} onChange={(e) => handleAssetExchangeRateChange(e.target.value)}
               placeholder="0.00" className="w-full p-2 bg-white border border-gray-200 rounded-lg outline-none"
             />
+          </div>
+          <div className="grid grid-cols-2 gap-4 pt-2 border-t border-gray-100">
+            <div>
+              <label className="flex items-center justify-between text-[10px] font-bold text-gray-400 uppercase mb-1">
+                <span>幣本位盈虧</span>
+                <button type="button" onClick={() => openCalculator('realizedProfitCoin')} className="text-emerald-500 hover:text-emerald-600"><Calculator className="w-3 h-3" /></button>
+              </label>
+              <input 
+                type="number" 
+                step="any"
+                value={realizedProfitCoin}
+                onChange={(e) => setRealizedProfitCoin(e.target.value)}
+                placeholder="0.00"
+                className="w-full p-2 bg-white border border-gray-200 rounded-lg outline-none text-sm"
+              />
+            </div>
+            <div>
+              <label className="flex items-center justify-between text-[10px] font-bold text-gray-400 uppercase mb-1">
+                <span>U本位盈虧</span>
+                <button type="button" onClick={() => openCalculator('realizedProfitUSDT')} className="text-emerald-500 hover:text-emerald-600"><Calculator className="w-3 h-3" /></button>
+              </label>
+              <input 
+                type="number" 
+                step="any"
+                value={realizedProfitUSDT}
+                onChange={(e) => setRealizedProfitUSDT(e.target.value)}
+                placeholder="0.00"
+                className="w-full p-2 bg-white border border-gray-200 rounded-lg outline-none text-sm"
+              />
+            </div>
           </div>
         </div>
       ) : (
@@ -558,7 +475,10 @@ export default function TransactionForm({ onAdd, onUpdate, currentExchangeRate, 
           <div className="grid grid-cols-2 gap-4">
             {!isManualSelection && (
               <div>
-                <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">數量</label>
+                <label className="flex items-center justify-between text-[10px] font-bold text-gray-400 uppercase mb-1">
+                  <span>數量</span>
+                  <button type="button" onClick={() => openCalculator('amount')} className="text-emerald-500 hover:text-emerald-600"><Calculator className="w-3 h-3" /></button>
+                </label>
                 <input 
                   type="number" 
                   step="any"
@@ -571,7 +491,10 @@ export default function TransactionForm({ onAdd, onUpdate, currentExchangeRate, 
               </div>
             )}
             <div className={isManualSelection ? "col-span-2" : ""}>
-              <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">總金額 ({pair})</label>
+              <label className="flex items-center justify-between text-[10px] font-bold text-gray-400 uppercase mb-1">
+                <span>總金額 ({pair})</span>
+                <button type="button" onClick={() => openCalculator('totalCost')} className="text-emerald-500 hover:text-emerald-600"><Calculator className="w-3 h-3" /></button>
+              </label>
               <input 
                 type="number" 
                 step="any"
@@ -580,14 +503,12 @@ export default function TransactionForm({ onAdd, onUpdate, currentExchangeRate, 
                 placeholder="0.00"
                 className="w-full p-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-sm"
               />
-              {pair === 'TWD' && totalCost && exchangeRate && (
-                <p className="text-[10px] text-emerald-600 mt-1">
-                  ≈ {(parseFloat(totalCost) / parseFloat(exchangeRate)).toFixed(2)} USDT
-                </p>
-              )}
             </div>
             <div className={isManualSelection ? "col-span-2" : ""}>
-              <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">單價 (USDT)</label>
+              <label className="flex items-center justify-between text-[10px] font-bold text-gray-400 uppercase mb-1">
+                <span>單價 ({pair})</span>
+                <button type="button" onClick={() => openCalculator('price')} className="text-emerald-500 hover:text-emerald-600"><Calculator className="w-3 h-3" /></button>
+              </label>
               <input 
                 type="number" 
                 step="any"
@@ -597,13 +518,41 @@ export default function TransactionForm({ onAdd, onUpdate, currentExchangeRate, 
                 className="w-full p-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-sm"
                 required
               />
-              {pair === 'TWD' && price && exchangeRate && (
-                <p className="text-[10px] text-gray-400 mt-1">
-                  ≈ {(parseFloat(price) * parseFloat(exchangeRate)).toFixed(2)} TWD
-                </p>
-              )}
             </div>
           </div>
+          
+          {type === 'SELL' && (
+            <div className="grid grid-cols-2 gap-4 pt-2 border-t border-gray-100">
+              <div>
+                <label className="flex items-center justify-between text-[10px] font-bold text-gray-400 uppercase mb-1">
+                  <span>幣本位盈虧</span>
+                  <button type="button" onClick={() => openCalculator('realizedProfitCoin')} className="text-emerald-500 hover:text-emerald-600"><Calculator className="w-3 h-3" /></button>
+                </label>
+                <input 
+                  type="number" 
+                  step="any"
+                  value={realizedProfitCoin}
+                  onChange={(e) => setRealizedProfitCoin(e.target.value)}
+                  placeholder="0.00"
+                  className="w-full p-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-sm"
+                />
+              </div>
+              <div>
+                <label className="flex items-center justify-between text-[10px] font-bold text-gray-400 uppercase mb-1">
+                  <span>U本位盈虧</span>
+                  <button type="button" onClick={() => openCalculator('realizedProfitUSDT')} className="text-emerald-500 hover:text-emerald-600"><Calculator className="w-3 h-3" /></button>
+                </label>
+                <input 
+                  type="number" 
+                  step="any"
+                  value={realizedProfitUSDT}
+                  onChange={(e) => setRealizedProfitUSDT(e.target.value)}
+                  placeholder="0.00"
+                  className="w-full p-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-sm"
+                />
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -613,6 +562,54 @@ export default function TransactionForm({ onAdd, onUpdate, currentExchangeRate, 
       >
         {editData ? '確認修改' : '確認新增'} {isManualSelection && `(${totalSelectedAmount.toFixed(4)})`}
       </button>
+
+      {showCalculator && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm overflow-hidden">
+            <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+              <h3 className="font-bold text-gray-800">
+                手動計算機 - {
+                  calcTarget === 'amount' ? '數量' :
+                  calcTarget === 'price' ? '單價' :
+                  calcTarget === 'totalCost' ? '總金額' :
+                  calcTarget === 'realizedProfitCoin' ? '幣本位盈虧' :
+                  calcTarget === 'realizedProfitUSDT' ? 'U本位盈虧' :
+                  calcTarget === 'fromAmount' ? '賣出數量' :
+                  calcTarget === 'toAmount' ? '換得數量' :
+                  calcTarget === 'assetExchangeRate' ? '兌換匯率' :
+                  ''
+                }
+              </h3>
+              <button type="button" onClick={() => setShowCalculator(false)} className="text-gray-400 hover:text-gray-600">
+                ✕
+              </button>
+            </div>
+            <div className="p-4 space-y-4">
+              <input
+                type="text"
+                value={calcInput}
+                onChange={(e) => setCalcInput(e.target.value)}
+                placeholder="例如: 100 * 31.5 / 2"
+                className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none font-mono text-lg"
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    applyCalculatorResult();
+                  }
+                }}
+              />
+              <button
+                type="button"
+                onClick={applyCalculatorResult}
+                className="w-full py-3 bg-emerald-500 hover:bg-emerald-600 text-white font-bold rounded-xl transition-colors"
+              >
+                計算並填入
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </form>
   );
 }

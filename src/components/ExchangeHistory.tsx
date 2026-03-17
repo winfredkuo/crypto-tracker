@@ -39,6 +39,7 @@ export default function ExchangeHistory({ transactions, onDelete, onEdit }: Prop
                 <th className="px-4 py-3 text-center"></th>
                 <th className="px-4 py-3 text-left">換得數量</th>
                 <th className="px-4 py-3 text-right">匯率</th>
+                <th className="px-4 py-3 text-right">盈虧</th>
                 <th className="px-4 py-3 text-right">操作</th>
               </tr>
             </thead>
@@ -90,6 +91,21 @@ export default function ExchangeHistory({ transactions, onDelete, onEdit }: Prop
                           ? 'SOL/ETH' 
                           : `${tx.fromAsset}/${tx.toAsset}`}
                       </span>
+                    </div>
+                  </td>
+                  <td className="px-4 py-4 text-right">
+                    <div className="flex flex-col items-end gap-1">
+                      {tx.realizedProfitUSDT !== undefined && tx.realizedProfitUSDT !== null && (
+                        <span className={`text-xs font-bold ${tx.realizedProfitUSDT >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                          {tx.realizedProfitUSDT >= 0 ? '+' : ''}{tx.realizedProfitUSDT.toFixed(2)} U
+                        </span>
+                      )}
+                      {tx.realizedProfitCoin !== undefined && tx.realizedProfitCoin !== null && (
+                        <span className={`text-xs font-bold ${tx.realizedProfitCoin >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                          {tx.realizedProfitCoin >= 0 ? '+' : ''}{tx.realizedProfitCoin.toFixed(4)} 幣
+                        </span>
+                      )}
+                      {tx.realizedProfitUSDT === undefined && tx.realizedProfitCoin === undefined && <span className="text-gray-400">-</span>}
                     </div>
                   </td>
                   <td className="px-4 py-4 text-right">

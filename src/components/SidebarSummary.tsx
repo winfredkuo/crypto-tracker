@@ -6,11 +6,10 @@ import { motion } from 'motion/react';
 interface Props {
   transactions: Transaction[];
   prices: PriceData[];
-  usdtTwd: number;
   onReset?: () => void;
 }
 
-export default function SidebarSummary({ transactions, prices, usdtTwd, onReset }: Props) {
+export default function SidebarSummary({ transactions, prices, onReset }: Props) {
   const calculateHoldings = () => {
     const holdings: Record<Asset, { amount: number; totalCostUSDT: number }> = {
       ETH: { amount: 0, totalCostUSDT: 0 },
@@ -20,7 +19,7 @@ export default function SidebarSummary({ transactions, prices, usdtTwd, onReset 
 
     transactions.forEach((tx) => {
       if (tx.type === 'BUY') {
-        const rate = tx.exchangeRate || usdtTwd || 31.5;
+        const rate = tx.exchangeRate || 31.5;
         const costInUSDT = tx.pair === 'USDT' ? tx.price : tx.price / rate;
         const amount = tx.remainingAmount || 0;
         
@@ -67,9 +66,6 @@ export default function SidebarSummary({ transactions, prices, usdtTwd, onReset 
           ${totalValueUSDT.toLocaleString(undefined, { maximumFractionDigits: 2 })}
           <span className="text-xs font-normal text-gray-400 ml-1">USDT</span>
         </h2>
-        <p className="text-xs text-gray-500 mt-1">
-          ≈ {(totalValueUSDT * usdtTwd).toLocaleString(undefined, { maximumFractionDigits: 0 })} TWD
-        </p>
       </motion.div>
 
       {/* Exchange Rates Card */}
@@ -87,11 +83,6 @@ export default function SidebarSummary({ transactions, prices, usdtTwd, onReset 
         </div>
         
         <div className="space-y-3">
-          <div className="flex justify-between items-center">
-            <span className="text-xs font-medium text-gray-500">USDT/TWD</span>
-            <span className="text-sm font-bold text-gray-900">{usdtTwd.toFixed(2)}</span>
-          </div>
-          
           {solEthRate > 0 && (
             <div className="flex justify-between items-center">
               <span className="text-xs font-medium text-gray-500">SOL/ETH</span>
