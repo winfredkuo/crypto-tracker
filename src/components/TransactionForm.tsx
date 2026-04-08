@@ -21,6 +21,8 @@ export default function TransactionForm({ onAdd, onUpdate, transactions, editDat
   const [exchangeRate, setExchangeRate] = useState('31.5');
   const [realizedProfitCoin, setRealizedProfitCoin] = useState('');
   const [realizedProfitUSDT, setRealizedProfitUSDT] = useState('');
+  const [note, setNote] = useState('');
+  const [fee, setFee] = useState('');
 
   // For EXCHANGE
   const [fromAsset, setFromAsset] = useState<Asset>('ETH');
@@ -49,6 +51,8 @@ export default function TransactionForm({ onAdd, onUpdate, transactions, editDat
       setExchangeRate((editData.exchangeRate ?? 31.5).toString());
       setRealizedProfitCoin((editData.realizedProfitCoin ?? '').toString());
       setRealizedProfitUSDT((editData.realizedProfitUSDT ?? '').toString());
+      setNote(editData.note || '');
+      setFee((editData.fee ?? '').toString());
       if (editData.type === 'EXCHANGE') {
         setFromAsset(editData.fromAsset || 'ETH');
         setToAsset(editData.toAsset || 'SOL');
@@ -211,7 +215,9 @@ export default function TransactionForm({ onAdd, onUpdate, transactions, editDat
         toAmount: parseFloat(toAmount),
         assetExchangeRate: rate,
         realizedProfitCoin: realizedProfitCoin ? parseFloat(realizedProfitCoin) : undefined,
-        realizedProfitUSDT: realizedProfitUSDT ? parseFloat(realizedProfitUSDT) : undefined
+        realizedProfitUSDT: realizedProfitUSDT ? parseFloat(realizedProfitUSDT) : undefined,
+        note,
+        fee: fee ? parseFloat(fee) : 0
       };
       if (editData && onUpdate) {
         onUpdate(editData.id, data);
@@ -232,7 +238,9 @@ export default function TransactionForm({ onAdd, onUpdate, transactions, editDat
         selectedLots: lotData,
         remainingAmount: editData ? editData.remainingAmount : (type === 'BUY' ? finalAmount : undefined),
         realizedProfitCoin: realizedProfitCoin ? parseFloat(realizedProfitCoin) : undefined,
-        realizedProfitUSDT: realizedProfitUSDT ? parseFloat(realizedProfitUSDT) : undefined
+        realizedProfitUSDT: realizedProfitUSDT ? parseFloat(realizedProfitUSDT) : undefined,
+        note,
+        fee: fee ? parseFloat(fee) : 0
       };
       if (editData && onUpdate) {
         onUpdate(editData.id, data);
@@ -247,6 +255,10 @@ export default function TransactionForm({ onAdd, onUpdate, transactions, editDat
       setFromAmount('');
       setToAmount('');
       setAssetExchangeRate('');
+      setRealizedProfitCoin('');
+      setRealizedProfitUSDT('');
+      setNote('');
+      setFee('');
       setSelectedLots({});
     }
   };
@@ -553,15 +565,42 @@ export default function TransactionForm({ onAdd, onUpdate, transactions, editDat
               </div>
             </div>
           )}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="text-[10px] font-bold text-gray-400 uppercase mb-1 block">手續費 ({pair})</label>
+              <input 
+                type="number" step="any" value={fee} onChange={(e) => setFee(e.target.value)}
+                placeholder="0.00" className="w-full p-2 bg-gray-50 border border-gray-200 rounded-lg outline-none text-sm"
+              />
+            </div>
+            <div>
+              <label className="text-[10px] font-bold text-gray-400 uppercase mb-1 block">備註</label>
+              <input 
+                type="text" value={note} onChange={(e) => setNote(e.target.value)}
+                placeholder="選填" className="w-full p-2 bg-gray-50 border border-gray-200 rounded-lg outline-none text-sm"
+              />
+            </div>
+          </div>
         </div>
       )}
 
-      <button 
-        type="submit"
-        className={`w-full py-3 ${editData ? 'bg-indigo-500 hover:bg-indigo-600 shadow-indigo-500/20' : 'bg-emerald-500 hover:bg-emerald-600 shadow-emerald-500/20'} text-white font-semibold rounded-xl transition-colors shadow-lg`}
-      >
-        {editData ? '確認修改' : '確認新增'} {isManualSelection && `(${totalSelectedAmount.toFixed(4)})`}
-      </button>
+      <div className="flex gap-3">
+        {editData && (
+          <button 
+            type="button"
+            onClick={onCancelEdit}
+            className="flex-1 py-3 bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold rounded-xl transition-all"
+          >
+            取消
+          </button>
+        )}
+        <button 
+          type="submit"
+          className={`flex-[2] py-3 ${editData ? 'bg-indigo-500 hover:bg-indigo-600 shadow-indigo-500/20' : 'bg-emerald-500 hover:bg-emerald-600 shadow-emerald-500/20'} text-white font-bold rounded-xl transition-all shadow-lg`}
+        >
+          {editData ? '儲存修改' : '確認新增'} {isManualSelection && `(${totalSelectedAmount.toFixed(4)})`}
+        </button>
+      </div>
 
       {showCalculator && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">

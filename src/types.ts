@@ -15,6 +15,8 @@ export interface Transaction {
   realizedProfitCoin?: number; // 幣本位盈虧
   realizedProfitUSDT?: number; // U本位盈虧
   timestamp: string;
+  note?: string;
+  fee?: number;
   // For EXCHANGE
   fromAsset?: Asset;
   toAsset?: Asset;
